@@ -10,7 +10,7 @@ const tools = [
   'get_element_details', 'assert_element_visible', 'assert_element_text', 'assert_element_attribute',
   'assert_page_title', 'assert_current_url', 'assert_element_count', 'execute_test_scenario',
   'get_test_execution_results', 'list_test_executions', 'get_test_execution', 'export_test_report',
-  'get_execution_evidence'
+  'get_execution_evidence', 'decode_page_barcode', 'assert_barcode_value'
 ];
 const jar = process.argv[2] ?? 'target/selenium-mcp-0.1.0.jar';
 const child = spawn('java', ['-jar', jar], { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true });
@@ -46,7 +46,7 @@ try {
   child.stdin.end();
   const [code] = await closed;
   assert.equal(code, 0);
-  console.log('Verified initialize, 28 named tools, structured error and clean EOF.');
+  console.log('Verified initialize, 30 named tools, structured error and clean EOF.');
 } finally {
   clearTimeout(stop);
   if (child.exitCode === null && child.signalCode === null) child.kill();

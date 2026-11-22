@@ -27,7 +27,9 @@ final class BrowserTools {
             Map.entry("attribute", choices("id", "name", "class", "type", "role", "title", "alt", "disabled",
                     "checked", "aria-label", "aria-expanded", "aria-checked", "data-testid")),
             Map.entry("executionId", stringField(36)), Map.entry("format", choices("json", "html")),
+            Map.entry("expectedFormat", choices(BarcodeTools.FORMAT_NAMES.toArray(String[]::new))),
             Map.entry("scenario", ScenarioEngine.SCHEMA));
+    private static final Map<String, Object> BARCODE_STRATEGY = choices(BarcodeTools.STRATEGIES.toArray(String[]::new));
 
     private static Map<String, Object> choices(String... options) {
         return Map.of("type", "string", "enum", List.of(options));
@@ -59,6 +61,7 @@ final class BrowserTools {
 
     List<SyncToolSpecification> specifications() {
         var advanced = new AdvancedTools(origins);
+        var barcode = new BarcodeTools(origins);
         var tools = new ArrayList<>(List.of(
                 tool("launch_browser", "Open a fresh browser. Headless defaults to true.", a -> {
                     sessions.launch((String) a.get("browser"), (boolean) a.getOrDefault("headless", true));
@@ -145,7 +148,11 @@ final class BrowserTools {
                 assertion("assert_element_attribute", "Compare a supported DOM attribute.", "selector", "strategy?", "attribute", "expected"),
                 assertion("assert_page_title", "Compare the top-level page title exactly.", "expected"),
                 assertion("assert_current_url", "Compare the top-level URL.", "expected", "match?"),
-                assertion("assert_element_count", "Count matches in the active document.", "selector", "strategy?", "count")));
+                assertion("assert_element_count", "Count matches in the active document.", "selector", "strategy?", "count"),
+                barcodeTool("decode_page_barcode", "Capture a rendered barcode element by CSS or XPath and decode its value and format.",
+                        a -> onPage(d -> barcode.decodePageBarcode(d, a)), "selector", "strategy?"),
+                barcodeTool("assert_barcode_value", "Decode a rendered barcode element and compare its value and optional format.",
+                        a -> onPage(d -> barcode.assertBarcodeValue(d, a)), "selector", "strategy?", "expected", "expectedFormat?")));
         var steps = new HashMap<String, SyncToolSpecification>();
         for (var spec : tools) {
             if (ScenarioEngine.supports(spec.tool().name())) steps.put(spec.tool().name(), spec);
@@ -214,9 +221,13 @@ final class BrowserTools {
         return CallToolResult.builder().addTextContent(message).build();
     }
 
-    private static CallToolResult error(String code, String message) {
+    private static CallToolResult error(String name, String code, String message) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        if (name.equals("assert_barcode_value")) data.put("status", "ERROR");
+        data.put("code", code);
+        data.put("message", message);
         return CallToolResult.builder().isError(true).addTextContent(code + ": " + message)
-                .structuredContent(Map.of("code", code, "message", message)).build();
+                .structuredContent(data).build();
     }
 
     static void validate(JsonSchema schema, Map<String, Object> args) {
@@ -229,7 +240,7 @@ final class BrowserTools {
             throw new ToolFailure("INVALID_INPUT", "A strategy requires a selector.");
         }
         for (var entry : args.entrySet()) {
-            var rule = FIELDS.get(entry.getKey());
+            var rule = (Map<?, ?>) properties.get(entry.getKey());
             Object value = entry.getValue();
             boolean valid = switch ((String) rule.get("type")) {
                 case "object" -> value instanceof Map<?, ?>;
@@ -237,8 +248,9 @@ final class BrowserTools {
                 case "integer" -> (value instanceof Integer || value instanceof Long)
                         && ((Number) value).longValue() >= (int) rule.get("minimum")
                         && ((Number) value).longValue() <= (int) rule.get("maximum");
-                default -> value instanceof String s && s.length() >= (int) rule.getOrDefault("minLength", 0)
-                        && s.length() <= (int) rule.getOrDefault("maxLength", 16)
+                default -> value instanceof String s
+                        && s.length() >= (rule.get("minLength") instanceof Integer min ? min : 0)
+                        && s.length() <= (rule.get("maxLength") instanceof Integer max ? max : 16)
                         && (!rule.containsKey("enum") || ((List<?>) rule.get("enum")).contains(s));
             };
             if (!valid) throw new ToolFailure("INVALID_INPUT", "Invalid argument: " + entry.getKey());
@@ -249,14 +261,25 @@ final class BrowserTools {
         }
     }
 
+    private SyncToolSpecification barcodeTool(String name, String description,
+            Function<Map<String, Object>, CallToolResult> action, String... fields) {
+        return toolWithOverrides(name, description, Map.of("strategy", BARCODE_STRATEGY), action, fields);
+    }
+
     private SyncToolSpecification tool(String name, String description,
+            Function<Map<String, Object>, CallToolResult> action, String... fields) {
+        return toolWithOverrides(name, description, Map.of(), action, fields);
+    }
+
+    private SyncToolSpecification toolWithOverrides(String name, String description,
+            Map<String, Map<String, Object>> overrides,
             Function<Map<String, Object>, CallToolResult> action, String... fields) {
         Map<String, Object> properties = new LinkedHashMap<>();
         List<String> required = new ArrayList<>();
         for (String spec : fields) {
             boolean optional = spec.endsWith("?");
             String field = optional ? spec.substring(0, spec.length() - 1) : spec;
-            properties.put(field, FIELDS.get(field));
+            properties.put(field, overrides.getOrDefault(field, FIELDS.get(field)));
             if (!optional) required.add(field);
         }
         var schema = new JsonSchema("object", properties, required, false, null, null);
@@ -267,13 +290,13 @@ final class BrowserTools {
                 validate(schema, args);
                 return action.apply(args);
             } catch (ToolFailure failure) {
-                return error(failure.code, failure.getMessage());
+                return error(name, failure.code, failure.getMessage());
             } catch (RuntimeException failure) {
                 var classified = ToolFailure.browser(failure);
                 if (classified.code.equals("BROWSER_ERROR")) {
                     LoggerFactory.getLogger(BrowserTools.class).warn("{} failed with an unclassified browser error", name);
                 }
-                return error(classified.code, classified.getMessage());
+                return error(name, classified.code, classified.getMessage());
             }
         }).build();
     }

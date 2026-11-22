@@ -201,7 +201,7 @@ final class ScenarioEngine {
     private static Map<String, Object> diagnostics(CallToolResult result) {
         var fields = (Map<?, ?>) result.structuredContent();
         var safe = new HashMap<String, Object>();
-        for (String key : List.of("code", "message", "status", "expected", "actual")) {
+        for (String key : List.of("code", "message", "status", "expected", "actual", "expectedFormat", "actualFormat")) {
             if (fields.containsKey(key)) safe.put(key, fields.get(key));
         }
         return safe;

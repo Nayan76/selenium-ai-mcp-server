@@ -1,6 +1,6 @@
 # Selenium MCP Server
 
-Control one Chrome, Firefox, or Edge session from an MCP client over stdio. The 28 tools share a fresh browser profile and run headlessly by default.
+Control one Chrome, Firefox, or Edge session from an MCP client over stdio. The 30 tools share a fresh browser profile and run headlessly by default.
 
 ## Build and run
 
@@ -25,7 +25,7 @@ npx --yes @modelcontextprotocol/inspector@2.16.0 --cli --config inspector.json -
 npx --yes @modelcontextprotocol/inspector@2.16.0 --cli --config inspector.json --server selenium --method tools/call --tool-name get_page_text
 ```
 
-Expect 28 tools from the first command and a structured `NO_SESSION` error from the second. Each CLI invocation launches a new process. For a sequence of browser operations, start the interactive Inspector and keep the connection open:
+Expect 30 tools from the first command and a structured `NO_SESSION` error from the second. Each CLI invocation launches a new process. For a sequence of browser operations, start the interactive Inspector and keep the connection open:
 
 ```powershell
 npx --yes @modelcontextprotocol/inspector@2.16.0 --web --config inspector.json --server selenium
@@ -86,7 +86,7 @@ String comparisons are case-sensitive and default to exact matching. A missing e
 
 ### Run a test case
 
-Launch a browser first. Supply a JSON object as the `scenario` argument. Use a public case ID of 1–64 letters, digits, underscores, periods or hyphens, beginning with a letter or digit. Provide a description of 1–512 characters. Supported scenario steps are `navigate`, `click_element`, `type_text`, `wait_for_element` and the six assertions above. Each step uses its tool's normal arguments.
+Launch a browser first. Supply a JSON object as the `scenario` argument. Use a public case ID of 1–64 letters, digits, underscores, periods or hyphens, beginning with a letter or digit. Provide a description of 1–512 characters. Supported scenario steps are `navigate`, `click_element`, `type_text`, `wait_for_element`, the six assertions above, and `assert_barcode_value`. Each step uses its tool's normal arguments.
 
 This example checks the heading on the origin configured for Inspector.
 
@@ -140,6 +140,21 @@ A report contains one row per attempted step. Operational failures produce ERROR
 A plan accepts 1–32 steps and a deadline of 1–60 seconds, defaulting to 30. Timing starts once the scenario acquires exclusive use of the session. Explicit waits and page-load timeouts are capped to the remaining budget. The engine checks before and after each step and stops on expiry even with continuation enabled. An in-flight driver command or cleanup may delay the response beyond the deadline.
 
 The latest completed report stays in memory until another valid run completes or the process exits. Rejected plans leave that report available. Before the first run, retrieval returns `NO_RESULTS`. Reports retain the public case ID, tool names, timing, states and counts. String observations and expectations are masked, including page text and URLs. Descriptions, typed values, selectors and raw driver errors are omitted. Malformed JSON-RPC is handled by the SDK before scenario validation.
+
+## Barcode decoding and validation
+
+Two ZXing-backed tools decode rendered barcodes directly from the active browser session without downloading remote images outside the browser. Both accept CSS selectors by default (`"strategy":"css"`) or XPath expressions (`"strategy":"xpath"`) and work with rendered `<img>`, inline `<svg>`, and `<canvas>` elements (including transparent backgrounds).
+
+| Tool | Example arguments | Behavior |
+| --- | --- | --- |
+| `decode_page_barcode` | `{"selector":"#ticket-qr"}` or `{"selector":"//canvas[@id='barcode']","strategy":"xpath"}` | Waits up to five seconds for the matched element to be visible and loaded, scrolls it into view, captures its rendered PNG with Selenium, and returns `value` and `format`. |
+| `assert_barcode_value` | `{"selector":"#ticket-qr","expected":"ORDER-2026-9981","expectedFormat":"CODE_128"}` | Reads the rendered barcode once, compares exact value and optional `expectedFormat`, and returns structured `PASS`, `FAIL` (`isError: false`), or `ERROR` (`isError: true` with `code` and `message`). |
+
+Supported ZXing formats are `CODE_128`, `CODE_39`, `EAN_13`, `UPC_A`, `QR_CODE`, and `DATA_MATRIX`. Before and after capturing the element screenshot, the server verifies both the active context and every document in the viewport against `SELENIUM_ALLOWED_ORIGINS`, and enforces PNG size (4 MiB) and image dimension limits (up to 4,096 × 4,096 and 8 megapixels). Captured pixels are composited onto an opaque white background with a quiet-zone margin before decoding.
+
+`assert_barcode_value` is also supported as a step inside `execute_test_scenario`, so assertion failures (`FAIL`) and decode/element errors (`ERROR`) automatically capture viewport evidence and appear in execution history and JSON/HTML reports. Expected and actual barcode strings are redacted (`[redacted]`) in assertion responses and retained reports, while the non-sensitive format enum names (`actualFormat` and optional `expectedFormat`) are preserved.
+
+**Exact-match and EAN-13 / UPC-A policy:** `assert_barcode_value` compares `expected` using strict, case-sensitive exact equality (no trimming, substring matching, or leading-zero normalization) and compares `expectedFormat` by exact enum name when supplied. When both `EAN_13` and `UPC_A` are enabled in ZXing, non-zero 13-digit EAN-13 symbols decode as 13-digit `EAN_13`, while 13-digit EAN-13 symbols beginning with `0` (for example `0036000291452`) decode as 12-digit `UPC_A` (`036000291452`). Under the exact-match policy, assert the 12-digit `UPC_A` form for leading-zero EAN-13/UPC-A codes.
 
 ## Evidence, execution history and reports
 
@@ -209,7 +224,7 @@ The HTML opens locally with embedded styles, a status summary, timings, redacted
 
 ## Tests
 
-`mvn test` runs validation and session-state tests. To exercise all 28 tools using a real headless browser and a temporary loopback HTTP fixture, run one of:
+`mvn test` runs validation and session-state tests. To exercise all 30 tools using a real headless browser and a temporary loopback HTTP fixture, run one of:
 
 ```powershell
 mvn "-Dbrowser.test=chrome" test
@@ -217,7 +232,7 @@ mvn "-Dbrowser.test=firefox" test
 mvn "-Dbrowser.test=edge" test
 ```
 
-The fixtures exercise text entry, click effects, discovery, explicit waits, selects, hover, scroll, frame and window transitions, blocked origins, PNG bytes, upload rejection, and cleanup. Test reports appear under `target/surefire-reports`.
+The fixtures exercise text entry, click effects, discovery, explicit waits, selects, hover, scroll, frame and window transitions, blocked origins, PNG bytes, barcode decoding and assertions across `<img>`/`<svg>`/`<canvas>`, upload rejection, and cleanup. Test reports appear under `target/surefire-reports`.
 
 ## Release build and local client
 
@@ -238,7 +253,7 @@ java -jar target/selenium-mcp-0.1.0.jar
 Get-FileHash target/selenium-mcp-0.1.0.jar -Algorithm SHA256
 ```
 
-For a desktop MCP client, copy the `mcpServers.selenium` entry from `inspector.json`. Set its second `args` item to the absolute installed JAR path (for example `/opt/selenium-mcp/selenium-mcp-0.1.0.jar` or `C:/Tools/selenium-mcp/selenium-mcp-0.1.0.jar`). Set the exact trusted HTTP(S) origins in the entry's `env` object. Restart the client and list tools. A successful connection advertises 28 tools.
+For a desktop MCP client, copy the `mcpServers.selenium` entry from `inspector.json`. Set its second `args` item to the absolute installed JAR path (for example `/opt/selenium-mcp/selenium-mcp-0.1.0.jar` or `C:/Tools/selenium-mcp/selenium-mcp-0.1.0.jar`). Set the exact trusted HTTP(S) origins in the entry's `env` object. Restart the client and list tools. A successful connection advertises 30 tools.
 
 ### Operational boundaries
 
@@ -258,7 +273,7 @@ mvn -B -ntp org.apache.maven.plugins:maven-dependency-plugin:3.7.0:tree "-Doutpu
 ./scripts/audit-dependencies.ps1
 ```
 
-Run the packaged protocol smoke test with Node.js using `node scripts/smoke-stdio.mjs`. It initializes an actual Java process, checks all 28 tool names and a structured error, and verifies shutdown on stdin EOF.
+Run the packaged protocol smoke test with Node.js using `node scripts/smoke-stdio.mjs`. It initializes an actual Java process, checks all 30 tool names and a structured error, and verifies shutdown on stdin EOF.
 
 The check queries OSV with public Maven package coordinates, including transitives and test libraries. It fails on advisory matches or an incomplete response. Browser binaries, build plugins and npm tools need their own update policy.
 

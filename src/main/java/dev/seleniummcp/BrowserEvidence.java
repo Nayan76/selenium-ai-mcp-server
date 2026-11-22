@@ -45,6 +45,16 @@ final class BrowserEvidence {
         return bytes;
     }
 
+    static byte[] elementScreenshot(WebDriver driver, WebElement element, Origins origins) {
+        checkViewport(driver, origins);
+        byte[] bytes = element.getScreenshotAs(OutputType.BYTES);
+        checkViewport(driver, origins);
+        if (bytes.length > ExecutionHistory.MAX_IMAGE) {
+            throw new ToolFailure("IMAGE_TOO_LARGE", "Captured barcode image exceeds 4 MiB.");
+        }
+        return bytes;
+    }
+
     private static void checkViewport(WebDriver driver, Origins origins) {
         origins.checkContext(driver);
         Object documents = ((JavascriptExecutor) driver).executeScript(DOCUMENTS);

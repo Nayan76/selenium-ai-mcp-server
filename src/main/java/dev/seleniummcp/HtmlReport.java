@@ -42,6 +42,12 @@ final class HtmlReport {
                     .append(" ms<td>").append(escape(row.get("code"))).append(" ").append(escape(row.get("message")));
             if (row.containsKey("expected")) html.append("<br>Expected ").append(escape(row.get("expected")))
                     .append(" · Actual ").append(escape(row.get("actual")));
+            if (row.containsKey("actualFormat")) {
+                html.append("<br>Format ").append(escape(row.get("actualFormat")));
+                if (row.containsKey("expectedFormat")) {
+                    html.append(" (expected ").append(escape(row.get("expectedFormat"))).append(")");
+                }
+            }
             html.append("<td>");
             if (row.get("evidence") instanceof Map<?, ?> evidence) {
                 String path = (String) evidence.get("path");
