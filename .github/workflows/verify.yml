@@ -37,8 +37,10 @@ jobs:
           java-version: '21.0.13+1.2'
       - name: Verify patched Java 21 runtime
         run: |
-          $version = & java -version 2>&1 | Select-Object -First 1
-          if ($LASTEXITCODE -ne 0 -or $version -notmatch '"21\.0\.13\.1"') {
+          $versionOutput = & java -version 2>&1
+          $javaExitCode = $LASTEXITCODE
+          $version = [string]($versionOutput | Select-Object -First 1)
+          if ($javaExitCode -ne 0 -or $version -notmatch '^openjdk version "21\.0\.13\.1"') {
             throw "Expected Temurin Java 21.0.13.1. Actual: $version"
           }
       - name: Verify with headless browser
