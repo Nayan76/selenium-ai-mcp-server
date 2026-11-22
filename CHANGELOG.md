@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+
+- API requests require Java 21.0.5 or a later Java 21 update. The stdio entry point caps JDK response-header parsing at 16 KiB before HTTP client initialization. Browser tools remain available on older Java 21 runtimes.
+- Added four REST API testing tools for HTTP requests, HTTP status assertions, restricted JSON assertions, and sanitized execution lookup. This release exposes 36 tools.
+- API testing uses separate origin authorization, direct IPv4 connections, explicit development-only HTTP loopback access, and bounded response handling and history. API results can be used alongside browser tools on the same MCP connection.
+
 ## 0.2.0
 
 - Organized the Java source into packages for browser sessions, tools, scenario execution, reporting, protocol handling, and security. Existing MCP tool contracts are unchanged.

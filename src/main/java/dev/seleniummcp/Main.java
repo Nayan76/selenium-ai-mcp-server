@@ -1,5 +1,7 @@
 package dev.seleniummcp;
 
+import dev.seleniummcp.api.ApiRuntime;
+import dev.seleniummcp.api.ApiTools;
 import dev.seleniummcp.browser.BrowserSession;
 import dev.seleniummcp.protocol.ProtocolInput;
 import dev.seleniummcp.reporting.ExecutionHistory;
@@ -14,6 +16,7 @@ import java.util.concurrent.CountDownLatch;
 
 public final class Main {
     public static void main(String[] args) throws InterruptedException {
+        ApiRuntime.configureHeaderParser();
         // The SDK transport logs complete input lines at DEBUG and parse exceptions at ERROR.
         System.setProperty("org.slf4j.simpleLogger.log.io.modelcontextprotocol", "off");
         var protocolOutput = System.out;
@@ -24,18 +27,23 @@ public final class Main {
         var origins = new Origins(System.getenv().getOrDefault("SELENIUM_ALLOWED_ORIGINS", ""));
         var sessions = new BrowserSession();
         var history = ExecutionHistory.configured();
+        var api = new ApiTools(System.getenv().getOrDefault("SELENIUM_API_ALLOWED_ORIGINS", ""),
+                Boolean.parseBoolean(System.getenv("SELENIUM_API_ALLOW_LOOPBACK")));
         var maintenance = Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().daemon().name("artifact-maintenance").factory());
         maintenance.scheduleWithFixedDelay(history::maintain, 0, 1, TimeUnit.MINUTES);
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             maintenance.shutdown();
+            api.close();
             sessions.shutdown();
             if (Boolean.parseBoolean(System.getenv("SELENIUM_CLEANUP_ON_EXIT"))) history.cleanup();
         }, "browser-cleanup"));
-        var server = McpServer.sync(transport).serverInfo("selenium-mcp", "0.2.0")
-                .tools(new BrowserTools(sessions, origins, history).specifications()).build();
+        var server = McpServer.sync(transport).serverInfo("selenium-mcp", "0.3.0")
+                .tools(new BrowserTools(sessions, origins, history).specifications())
+                .tools(api.specifications()).build();
         try {
             disconnected.await();
         } finally {
+            api.close();
             sessions.shutdown();
             server.closeGracefully();
         }

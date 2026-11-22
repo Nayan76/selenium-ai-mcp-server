@@ -2,7 +2,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>dev.seleniummcp</groupId>
   <artifactId>selenium-mcp</artifactId>
-  <version>0.2.0</version>
+  <version>0.3.0</version>
   <licenses>
     <license>
       <name>Apache License, Version 2.0</name>
@@ -28,7 +28,9 @@
     <finalName>selenium-mcp-${project.version}</finalName>
     <plugins>
       <plugin><artifactId>maven-compiler-plugin</artifactId><version>3.13.0</version></plugin>
-      <plugin><artifactId>maven-surefire-plugin</artifactId><version>3.5.2</version></plugin>
+      <plugin><artifactId>maven-surefire-plugin</artifactId><version>3.5.2</version><configuration>
+        <argLine>-Djdk.http.maxHeaderSize=16384</argLine>
+      </configuration></plugin>
       <plugin>
         <artifactId>maven-shade-plugin</artifactId><version>3.6.2</version>
         <executions><execution><phase>package</phase><goals><goal>shade</goal></goals>

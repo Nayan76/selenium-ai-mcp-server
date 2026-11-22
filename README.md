@@ -1,6 +1,6 @@
 # Selenium MCP Server
 
-Control one Chrome, Firefox, or Edge session from an MCP client over stdio. The 32 tools share a fresh browser profile and run headlessly by default.
+Control one Chrome, Firefox, or Edge session from an MCP client over stdio. Version 0.3.0 exposes 36 tools, including 32 browser and scenario tools and four REST API testing tools. The browser tools share a fresh profile and run headlessly by default.
 
 ## Build and run
 
@@ -25,7 +25,7 @@ npx --yes @modelcontextprotocol/inspector@2.16.0 --cli --config inspector.json -
 npx --yes @modelcontextprotocol/inspector@2.16.0 --cli --config inspector.json --server selenium --method tools/call --tool-name get_page_text
 ```
 
-Expect 32 tools from the first command and a structured `NO_SESSION` error from the second. Each CLI invocation launches a new process. For a sequence of browser operations, start the interactive Inspector and keep the connection open:
+Expect 36 tools from the first command and a structured `NO_SESSION` error from the second. Each CLI invocation launches a new process. For a sequence of browser or API operations, start the interactive Inspector and keep the connection open:
 
 ```powershell
 npx --yes @modelcontextprotocol/inspector@2.16.0 --web --config inspector.json --server selenium
@@ -234,6 +234,70 @@ Invoke-Item -LiteralPath (Join-Path 'selenium-artifacts' $reportPath)
 
 The HTML opens locally with embedded styles, a status summary, timings, redacted diagnostics and a step table. Screenshot links resolve beside the HTML file. Keep the referenced PNGs alongside the HTML when copying it. The JSON export contains the same structured execution record returned by lookup, including browser type, UTC start/end timestamps, per-step results and evidence metadata. Neither export includes image bytes.
 
+## REST API testing
+
+API testing requires a production Java 21 runtime at patch level **21.0.5 or later**. Check the Java executable selected by your MCP client with `java -version`. An older Java 21 runtime can start the server and use the browser tools. API requests on it return `API_RUNTIME_UNSUPPORTED` before opening a connection. Development and CI use Eclipse Temurin 21.0.13.1.
+
+The server sets the OpenJDK HTTP parser property `jdk.http.maxHeaderSize` at the start of the stdio entry point, before initializing HTTP clients. It preserves a stricter positive decimal setting and replaces a missing, invalid, disabled, or larger setting with 16,384 bytes. Oracle added this parser control in 21.0.5. The checks exercise the actual Temurin parser and the packaged launch path with an attempted unlimited override. Other runtime vendors must implement the same property and initialization behavior. [Oracle JDK 21.0.5 release notes](https://www.oracle.com/java/technologies/javase/21-0-5-relnotes.html)
+
+The four API tools are available starting in v0.3.0. Use them from the same MCP connection as browser tools. The HTTP client owns its own connections and does not persist cookies or share authentication with WebDriver. Browser and data-driven scenario schemas are unchanged. Call the API tools directly from the MCP client.
+
+### Configure API destinations
+
+Set `SELENIUM_API_ALLOWED_ORIGINS` to a comma-separated list of exact HTTP(S) origins. An empty list denies all API requests. An invalid entry disables API requests with `API_CONFIGURATION_INVALID`. Browser authorization uses its own `SELENIUM_ALLOWED_ORIGINS` setting.
+
+The API client accepts canonical dotted-decimal public IPv4 addresses. It rejects DNS names, IPv6, ambiguous IPv4 syntax, URL credentials and fragments, and local, private, shared, link-local, multicast, reserved, and known metadata addresses. Java 21's `HttpClient` has no per-request address pinning hook. Restricting requests to IPv4 literals avoids a hostname lookup between validation and connection. The client connects directly using HTTP/1.1, disables automatic redirects and cookie storage, and applies normal TLS certificate verification. HTTPS endpoints need a trusted certificate valid for the IP address. Domain-only and name-based virtual hosts are unsupported.
+
+The development-only switch `SELENIUM_API_ALLOW_LOOPBACK=true` permits HTTP on exactly `127.0.0.1` and still requires an exact API origin entry. For a fixture on port 8080, set the following before launching the server. Apply the same variables in the client configuration when the client launches the process.
+
+```powershell
+$env:SELENIUM_API_ALLOW_LOOPBACK = 'true'
+$env:SELENIUM_API_ALLOWED_ORIGINS = 'http://127.0.0.1:8080'
+$env:SELENIUM_ALLOWED_ORIGINS = 'http://127.0.0.1:8080'
+```
+
+An allowed origin permits requests to any path and query on that origin. Route changes, NAT, and services reachable through a permitted IP are outside application-level origin validation. Use an outbound firewall for network containment and scope allowlists to trusted test services. Keep JDK HTTP logging disabled and the Java HTTP header parser bounded. Plain HTTP sends any supplied credentials without TLS. Use it for local fixtures and use HTTPS for authenticated remote tests.
+
+### Tool contracts
+
+All inputs are JSON objects and reject unknown fields. `requestId` is a lowercase hyphenated UUID returned by the server.
+
+| Tool | Required input | Optional input | Structured result |
+| --- | --- | --- | --- |
+| `send_api_request` | `method` is `GET`, `POST`, `PUT`, `PATCH`, or `DELETE`. `url` is a string of 1–2,048 characters. | `headers` is a string map with up to 32 entries, 1–64-character names, and 0–2,048-character values. `body` is a string up to 65,536 characters and bytes in UTF-8. `timeoutSeconds` is an integer from 1 to 30, default 15. | `requestId`, `method`, `origin`, `startedAt`, `completedAt`, `durationMs`, `status`, and `statusCode` if received. A completed exchange includes `response`. A failed exchange includes `code` and `message`. |
+| `assert_api_status` | `requestId`, `expectedStatus` (integer 100–599) | | `PASS` or `FAIL` with actual and expected status codes. `ERROR` if the request or HTTP status is unavailable. |
+| `assert_api_response` | `requestId`, `jsonPath` (1–256 characters), `assertionType` (`equals`, `exists`, `not_exists`, `contains`, or `type`) | JSON `expected` is required for `equals`, `contains`, and `type`. Omit it for `exists` and `not_exists`. | `PASS`, `FAIL`, or `ERROR` with the assertion type and timestamp for a recorded request. JSON values and paths are excluded from results. |
+| `get_api_execution_results` | `requestId` | | The sanitized execution record with an `assertions` array. |
+
+Requests with a body default to `Content-Type: application/json` unless supplied explicitly. The combined header budget is 8 KiB for caller-supplied fields. Names must be HTTP tokens and values printable ASCII. Duplicate names, CRLF, framing and routing headers, and proxy overrides are rejected. Header values, request bodies, URL paths and queries, and raw HTTP exceptions are omitted from output and history.
+
+HTTP error statuses are completed exchanges. Redirect responses return their status with no redirect target and no follow-up connection. The deadline covers headers and the streamed body, with a separate connection limit of five seconds. Timeouts and transport failures are MCP errors. Timing out does not undo a request the endpoint already received.
+
+Response bodies are bounded to 128 KiB during streaming. The JDK rejects oversized header sections before handing a response to the application, which also checks the 16 KiB limit after parsing. A parser rejection returns `API_TRANSPORT_ERROR` without an HTTP status. The client requests identity encoding and rejects compressed responses. A completed response reports its byte count and kind (`JSON`, `INVALID_JSON`, `TEXT`, `EMPTY`, or `OTHER`). JSON is recognized by `application/json` or an `application/*+json` media type. Its preview contains only node types and container sizes, with up to four children per container and two levels below the root. Plain text and other body contents are omitted. JSON parsing also limits depth, tokens, and the sizes of names, strings, and numbers.
+
+### JSON assertions and retention
+
+- Start with `$` for the root. Use at most 24 dot properties or zero-based array indexes, such as `$.data.items[0].name`. A property starts with an ASCII letter or underscore, followed by ASCII letters, digits, underscores, or hyphens. Indexes use up to six digits with no leading zeroes. Quoted properties, wildcards, filters, recursive descent, and expressions are unsupported.
+- An absent property, wrong container type, or out-of-range index is missing. JSON `null` exists and equals explicit `"expected": null`. A missing node fails `equals`, `contains`, and `type`. Malformed JSON, non-JSON or empty content, and unsupported paths return `ERROR`. A normal mismatch returns `FAIL` with MCP success.
+- `equals` compares JSON values structurally. Object member order is irrelevant and array order matters. Numbers compare by numeric value so `1` and `1.0` are equal. Floating-point expectations have the precision supplied by MCP argument decoding. `contains` checks a case-sensitive substring for two strings or structural membership in an array. `type` accepts `object`, `array`, `string`, `number`, `boolean`, and `null`.
+- Recognizable credential fields, such as `access_token` and `password`, are removed before storing parsed JSON, and direct assertions on protected fields fail. All values and member names are omitted from previews. Other parsed values stay in process memory for assertions, whose outcomes can reveal facts about the response. Use a trusted MCP client and fixture data without secrets in unexpected fields.
+- History keeps the latest 32 completed API attempts, including failures after validation, and the latest 32 assertions per request. Entries become unavailable after 15 minutes and are pruned on history access. The client bounds simultaneous HTTP exchanges to four. API history is process-local and stays outside browser execution reports, JSON/HTML exports, and screenshot evidence.
+
+### Combined API and browser example
+
+Assume the loopback fixture serves `{"ready":true}` as JSON at `/api/health`, and a page titled `Test Dashboard` at `/dashboard`. Launch a browser using `launch_browser` with `{"browser":"chrome"}`, then call these tools over the same MCP connection.
+
+| Call | Example arguments |
+| --- | --- |
+| `send_api_request` | `{"method":"GET","url":"http://127.0.0.1:8080/api/health","timeoutSeconds":5}` |
+| `assert_api_status` | `{"requestId":"<returned UUID>","expectedStatus":200}` |
+| `assert_api_response` | `{"requestId":"<returned UUID>","jsonPath":"$.ready","assertionType":"equals","expected":true}` |
+| `navigate` | `{"url":"http://127.0.0.1:8080/dashboard"}` |
+| `assert_page_title` | `{"expected":"Test Dashboard"}` |
+| `get_api_execution_results` | `{"requestId":"<returned UUID>"}` |
+
+A completed send includes fields such as `{"status":"COMPLETED","statusCode":200,"response":{"kind":"JSON","bytes":14,"shape":{"type":"object","size":1,"children":[{"type":"boolean"}]}}}`. The assertion results each include `"status":"PASS"`. The history result includes both outcomes in `assertions`. Close the browser with `close_browser` when finished.
+
 ## Architecture and operating limits
 
 The codebase is organized by responsibility under `dev.seleniummcp`:
@@ -241,6 +305,7 @@ The codebase is organized by responsibility under `dev.seleniummcp`:
 - `dev.seleniummcp` (`Main`): connects the official Java SDK's synchronous server to stdio and handles shutdown/disconnects.
 - `dev.seleniummcp.protocol` (`ProtocolInput`): enforces the pre-decoding 4 MiB JSON-RPC message boundary.
 - `dev.seleniummcp.tools` (`BrowserTools`, `AdvancedTools`, `AssertionsTool`, `BarcodeTools`): defines the 32 MCP tool schemas, validates calls, maps errors, and runs bounded explicit waits.
+- `dev.seleniummcp.api` (`ApiTools`, `ApiRequestValidator`, `ApiClient`, `ApiAssertions`, `ApiExecutionHistory`): registers four API tools, validates origin and request inputs, bounds HTTP exchanges, evaluates JSON assertions, and retains sanitized process-local results.
 - `dev.seleniummcp.engine` (`ScenarioEngine`, `DataDrivenEngine`): prevalidates and executes sequential and parameterized data-driven scenarios under shared session locking and scenario deadlines.
 - `dev.seleniummcp.browser` (`BrowserSession`, `BrowserEvidence`): owns WebDriver lifecycle, serializes commands with teardown, and captures viewport-verified screenshots and redacted console diagnostics.
 - `dev.seleniummcp.reporting` (`ExecutionHistory`, `HtmlReport`): retains bounded process-local execution history and exports redacted JSON and standalone HTML reports.
@@ -253,7 +318,7 @@ Server shutdown calls `quit()` on the owned driver. A forced process kill can by
 
 ## Tests
 
-`mvn test` runs validation and session-state tests. To exercise all 32 tools using a real headless browser and a temporary loopback HTTP fixture, run one of:
+`mvn test` runs validation, session-state, and API fixture tests. To exercise the browser and mixed API/UI workflow with a real headless browser and temporary loopback HTTP fixtures, run one of:
 
 ```powershell
 mvn "-Dbrowser.test=chrome" test
@@ -265,26 +330,26 @@ The fixtures exercise text entry, click effects, discovery, explicit waits, sele
 
 ## Release build and local client
 
-For a release installation, download `selenium-mcp-0.2.0.jar` and `selenium-mcp-0.2.0.jar.sha256` into the same directory. Compare the JAR's SHA-256 hash with the value in the checksum file before launching it with Java 21. [v0.2.0 release](https://github.com/Nayan76/selenium-ai-mcp-server/releases/tag/v0.2.0)
+For a release installation, download `selenium-mcp-0.3.0.jar` and `selenium-mcp-0.3.0.jar.sha256` into the same directory. Compare the JAR's SHA-256 hash with the value in the checksum file before launching it with Java 21. [v0.3.0 release](https://github.com/Nayan76/selenium-ai-mcp-server/releases/tag/v0.3.0)
 
-Use JDK 21 and Maven 3.9.9 for repeatable local builds. From a fresh checkout, run `mvn -B -ntp clean verify -Dbrowser.test=chrome` (quote `"-Dbrowser.test=chrome"` in PowerShell). The build produces `target/selenium-mcp-0.2.0.jar` and the identical compatibility copy `target/selenium-mcp.jar`. Build and test from the same source, dependency versions, JDK and Maven distribution when comparing release checksums. Maven uses a fixed archive timestamp. The shaded JAR includes the service-provider descriptors and third-party license and notice text.
+Use JDK 21 and Maven 3.9.9 for repeatable local builds. From a fresh checkout, run `mvn -B -ntp clean verify -Dbrowser.test=chrome` (quote `"-Dbrowser.test=chrome"` in PowerShell). The build produces `target/selenium-mcp-0.3.0.jar` and the identical compatibility copy `target/selenium-mcp.jar`. Build and test from the same source, dependency versions, JDK and Maven distribution when comparing release checksums. Maven uses a fixed archive timestamp. The shaded JAR includes the service-provider descriptors and third-party license and notice text.
 
 Launch directly on Linux:
 
 ```sh
-SELENIUM_ALLOWED_ORIGINS=https://example.com java -jar target/selenium-mcp-0.2.0.jar
-sha256sum target/selenium-mcp-0.2.0.jar
+SELENIUM_ALLOWED_ORIGINS=https://example.com java -jar target/selenium-mcp-0.3.0.jar
+sha256sum target/selenium-mcp-0.3.0.jar
 ```
 
 Launch directly on Windows:
 
 ```powershell
 $env:SELENIUM_ALLOWED_ORIGINS = 'https://example.com'
-java -jar target/selenium-mcp-0.2.0.jar
-Get-FileHash target/selenium-mcp-0.2.0.jar -Algorithm SHA256
+java -jar target/selenium-mcp-0.3.0.jar
+Get-FileHash target/selenium-mcp-0.3.0.jar -Algorithm SHA256
 ```
 
-For a desktop MCP client, copy the `mcpServers.selenium` entry from `inspector.json`. Set its second `args` item to the absolute installed JAR path (for example `/opt/selenium-mcp/selenium-mcp-0.2.0.jar` or `C:/Tools/selenium-mcp/selenium-mcp-0.2.0.jar`). Set the exact trusted HTTP(S) origins in the entry's `env` object. Restart the client and list tools. A successful connection advertises 32 tools.
+For a desktop MCP client, copy the `mcpServers.selenium` entry from `inspector.json`. Set its second `args` item to the absolute installed JAR path (for example `/opt/selenium-mcp/selenium-mcp-0.3.0.jar` or `C:/Tools/selenium-mcp/selenium-mcp-0.3.0.jar`). Set trusted browser and API origins separately in the entry's `env` object. Restart the client and list tools. Version 0.3.0 advertises 36 tools.
 
 ### Operational boundaries
 
@@ -304,7 +369,7 @@ mvn -B -ntp org.apache.maven.plugins:maven-dependency-plugin:3.7.0:tree "-Doutpu
 ./scripts/audit-dependencies.ps1
 ```
 
-Run the packaged protocol smoke test with Node.js using `node scripts/smoke-stdio.mjs`. It initializes an actual Java process, checks all 32 tool names and a structured error, and verifies shutdown on stdin EOF.
+Run the packaged protocol smoke test with Node.js using `node scripts/smoke-stdio.mjs`. It initializes an actual Java process, checks all 36 tool names and a structured error, exercises the four API tools against a temporary loopback fixture, and verifies shutdown on stdin EOF.
 
 The check queries OSV with public Maven package coordinates, including transitives and test libraries. It fails on advisory matches or an incomplete response. Browser binaries, build plugins and npm tools need their own update policy.
 
