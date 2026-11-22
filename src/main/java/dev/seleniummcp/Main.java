@@ -31,7 +31,7 @@ public final class Main {
             sessions.shutdown();
             if (Boolean.parseBoolean(System.getenv("SELENIUM_CLEANUP_ON_EXIT"))) history.cleanup();
         }, "browser-cleanup"));
-        var server = McpServer.sync(transport).serverInfo("selenium-mcp", "0.1.0")
+        var server = McpServer.sync(transport).serverInfo("selenium-mcp", "0.2.0")
                 .tools(new BrowserTools(sessions, origins, history).specifications()).build();
         try {
             disconnected.await();

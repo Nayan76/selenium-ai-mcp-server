@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
+
+- Organized the Java source into packages for browser sessions, tools, scenario execution, reporting, protocol handling, and security. Existing MCP tool contracts are unchanged.
 
 - Added Phase 9 data-driven test execution (32 tools total):
   - `execute_data_driven_scenario` executes parameterized scenarios across bounded named datasets (1–20 datasets, 1–32 steps per dataset, up to 200 total steps, 1–120s timeout) using explicit `{{variable}}` placeholders restricted to safe data fields (`navigate.url`, `type_text.text`, and `assert_*.expected`) with single-pass resolution and pre-execution origin/schema validation.

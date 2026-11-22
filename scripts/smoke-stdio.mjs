@@ -13,7 +13,7 @@ const tools = [
   'get_execution_evidence', 'decode_page_barcode', 'assert_barcode_value',
   'execute_data_driven_scenario', 'get_data_driven_results'
 ];
-const jar = process.argv[2] ?? 'target/selenium-mcp-0.1.0.jar';
+const jar = process.argv[2] ?? 'target/selenium-mcp-0.2.0.jar';
 const child = spawn('java', ['-jar', jar], { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true });
 const closed = once(child, 'close');
 const stop = setTimeout(() => child.kill(), 30000);
@@ -38,6 +38,7 @@ try {
   const init = await request(1, 'initialize', {protocolVersion:'2025-06-18', capabilities:{},
     clientInfo:{name:'release-smoke',version:'1'}});
   assert.equal(init.serverInfo.name, 'selenium-mcp');
+  assert.equal(init.serverInfo.version, '0.2.0');
   send({method:'notifications/initialized'});
   const listed = await request(2, 'tools/list');
   assert.deepEqual(listed.tools.map(t => t.name).sort(), tools.sort());

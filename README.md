@@ -265,24 +265,26 @@ The fixtures exercise text entry, click effects, discovery, explicit waits, sele
 
 ## Release build and local client
 
-Use JDK 21 and Maven 3.9.9 for repeatable local builds. From a fresh checkout, run `mvn -B -ntp clean verify -Dbrowser.test=chrome` (quote `"-Dbrowser.test=chrome"` in PowerShell). The build produces `target/selenium-mcp-0.1.0.jar` and the identical compatibility copy `target/selenium-mcp.jar`. Build and test from the same source, dependency versions, JDK and Maven distribution when comparing release checksums. Maven uses a fixed archive timestamp. The shaded JAR includes the service-provider descriptors and third-party license and notice text.
+For a release installation, download `selenium-mcp-0.2.0.jar` and `selenium-mcp-0.2.0.jar.sha256` into the same directory. Compare the JAR's SHA-256 hash with the value in the checksum file before launching it with Java 21. [v0.2.0 release](https://github.com/Nayan76/selenium-ai-mcp-server/releases/tag/v0.2.0)
+
+Use JDK 21 and Maven 3.9.9 for repeatable local builds. From a fresh checkout, run `mvn -B -ntp clean verify -Dbrowser.test=chrome` (quote `"-Dbrowser.test=chrome"` in PowerShell). The build produces `target/selenium-mcp-0.2.0.jar` and the identical compatibility copy `target/selenium-mcp.jar`. Build and test from the same source, dependency versions, JDK and Maven distribution when comparing release checksums. Maven uses a fixed archive timestamp. The shaded JAR includes the service-provider descriptors and third-party license and notice text.
 
 Launch directly on Linux:
 
 ```sh
-SELENIUM_ALLOWED_ORIGINS=https://example.com java -jar target/selenium-mcp-0.1.0.jar
-sha256sum target/selenium-mcp-0.1.0.jar
+SELENIUM_ALLOWED_ORIGINS=https://example.com java -jar target/selenium-mcp-0.2.0.jar
+sha256sum target/selenium-mcp-0.2.0.jar
 ```
 
 Launch directly on Windows:
 
 ```powershell
 $env:SELENIUM_ALLOWED_ORIGINS = 'https://example.com'
-java -jar target/selenium-mcp-0.1.0.jar
-Get-FileHash target/selenium-mcp-0.1.0.jar -Algorithm SHA256
+java -jar target/selenium-mcp-0.2.0.jar
+Get-FileHash target/selenium-mcp-0.2.0.jar -Algorithm SHA256
 ```
 
-For a desktop MCP client, copy the `mcpServers.selenium` entry from `inspector.json`. Set its second `args` item to the absolute installed JAR path (for example `/opt/selenium-mcp/selenium-mcp-0.1.0.jar` or `C:/Tools/selenium-mcp/selenium-mcp-0.1.0.jar`). Set the exact trusted HTTP(S) origins in the entry's `env` object. Restart the client and list tools. A successful connection advertises 32 tools.
+For a desktop MCP client, copy the `mcpServers.selenium` entry from `inspector.json`. Set its second `args` item to the absolute installed JAR path (for example `/opt/selenium-mcp/selenium-mcp-0.2.0.jar` or `C:/Tools/selenium-mcp/selenium-mcp-0.2.0.jar`). Set the exact trusted HTTP(S) origins in the entry's `env` object. Restart the client and list tools. A successful connection advertises 32 tools.
 
 ### Operational boundaries
 
