@@ -1,6 +1,6 @@
 # Selenium MCP Server
 
-Control one Chrome, Firefox, or Edge session from an MCP client over stdio. Version 0.4.0 exposes 40 tools, including four new API collection tools. The browser tools share a fresh profile and run headlessly by default.
+Control one Chrome, Firefox, or Edge session from an MCP client over stdio. Version 0.5.0 exposes 45 tools, including saved API collections and operator-managed environments. The browser tools share a fresh profile and run headlessly by default.
 
 ## Build and run
 
@@ -25,7 +25,7 @@ npx --yes @modelcontextprotocol/inspector@2.16.0 --cli --config inspector.json -
 npx --yes @modelcontextprotocol/inspector@2.16.0 --cli --config inspector.json --server selenium --method tools/call --tool-name get_page_text
 ```
 
-Expect 40 tools from v0.4.0 and a structured `NO_SESSION` error from the second command. Each CLI invocation launches a new process. For a sequence of browser or API operations, start the interactive Inspector and keep the connection open:
+Expect 45 tools from v0.5.0. The second command returns a structured `NO_SESSION` error. Each CLI invocation launches a new process. For a sequence of browser or API operations, start the interactive Inspector and keep the connection open:
 
 ```powershell
 npx --yes @modelcontextprotocol/inspector@2.16.0 --web --config inspector.json --server selenium
@@ -356,6 +356,70 @@ With a trusted fixture at the configured loopback origin, call `execute_api_coll
 
 Pass the returned `executionId` to results or export. The engine supports sequential requests with no scripts, branching, automatic rollback, or response replay. A timeout does not undo effects already accepted by an endpoint. The network restrictions and limits in the REST API section also apply to collections.
 
+## Saved API collections and environments
+
+Saved API collections and environments are available starting in v0.5.0.
+
+Set `SELENIUM_API_ENVIRONMENTS_FILE` to an absolute operator-owned configuration path and `SELENIUM_SAVED_COLLECTION_DIR` to a precreated, empty private directory. Keep both outside the checkout and artifact root, with the configuration outside the saved directory. Restart the server to reload profiles. Missing or unsafe configuration returns `STORE_UNAVAILABLE` from the five saved-collection tools. Existing tools remain usable.
+
+```json
+{
+  "schemaVersion": 1,
+  "profiles": {
+    "dev": {
+      "enabled": true,
+      "origin": "http://127.0.0.1:8080",
+      "routes": {
+        "health": {"method": "GET", "path": "/health"},
+        "create": {
+          "method": "POST",
+          "path": "/items",
+          "allowMutation": true,
+          "secretHeaders": {"Authorization": "DEV_AUTHORIZATION"},
+          "jsonBodyEnv": "DEV_CREATE_BODY"
+        }
+      }
+    },
+    "qa": {"enabled": false, "origin": "https://203.0.113.10", "routes": {}},
+    "staging": {"enabled": false, "origin": "https://203.0.113.20", "routes": {}}
+  }
+}
+```
+
+The example QA and staging addresses are documentation placeholders. Only `dev`, `qa`, and `staging` are accepted. Each profile has at most 64 fixed routes. Omitted `enabled` or `allowMutation` flags are false. Enabling staging does not grant mutation permission. Grant each POST, PUT, PATCH, or DELETE route separately. No authorization is inferred from the MCP connection. The existing API allowlist, IPv4 rules, explicit HTTP loopback opt-in, Java runtime guard, direct connections, and redirect and response limits still apply. Keep the global API allowlist scoped for legacy tools, which continue to use it independently of saved profiles.
+
+Route paths are literal and scoped to the profile origin. Queries, fragments, authority overrides, dot segments, and encoded path components are rejected. Only `Authorization` and `X-Api-Key` may be sourced from environment variables. Their values are complete header values. `jsonBodyEnv` supplies a complete JSON body for an authorized mutating route. The configuration contains only references. The client resolves and validates the entire run before sending any request. Missing or invalid values return `SECRET_UNAVAILABLE` or `SECRET_INVALID` without identifying the reference or value.
+
+| Tool | Inputs | Result |
+| --- | --- | --- |
+| `list_api_environments` | None | Enabled IDs only |
+| `save_api_collection` | `name`, `requests`, optional `stopOnFailure` and `timeoutSeconds` | Full immutable definition with server-generated `collectionId` |
+| `list_saved_api_collections` | Optional `limit` from 1 to 32, default 10 | Newest-first metadata |
+| `get_saved_api_collection` | `collectionId` | Full immutable definition |
+| `execute_saved_api_collection` | `collectionId`, `environmentId` | Collection execution summary and IDs |
+
+A saved request contains `id`, `name`, `route`, and `expectedStatus` from 100 to 599. Use public labels. New collections accept 1–20 requests, a 1–120 second deadline (default 60), and stop on failure by default. Only status assertions are available. Run details and exports use the existing collection execution ID. The store accepts up to 32 definitions of 64 KiB each. HTTP endpoints can still log data they receive. A timeout cannot undo a request.
+
+### Private storage and recovery
+
+Use a trusted local directory. On Linux, provision the root as `0700` and the configuration file as `0600`, owned by the account running the server. On Windows, provision a service-account-owned root and configuration file on a fixed NTFS/ReFS volume. Set a protected DACL with access scoped to the service account, SYSTEM and local Administrators. For new dedicated paths, this PowerShell example sets the ACL after the operator has created the directory and file inside a trusted parent:
+
+```powershell
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$rootAcl = New-Object System.Security.AccessControl.DirectorySecurity
+$rootAcl.SetSecurityDescriptorSddlForm("O:${sid}D:P(A;OICI;FA;;;${sid})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)")
+Set-Acl -LiteralPath $env:SELENIUM_SAVED_COLLECTION_DIR -AclObject $rootAcl
+$fileAcl = New-Object System.Security.AccessControl.FileSecurity
+$fileAcl.SetSecurityDescriptorSddlForm("O:${sid}D:P(A;;FA;;;${sid})(A;;FA;;;SY)(A;;FA;;;BA)")
+Set-Acl -LiteralPath $env:SELENIUM_API_ENVIRONMENTS_FILE -AclObject $fileAcl
+```
+
+Windows validation inspects native handles for reparse points, owner, protected DACL and ACEs. It rejects junctions, broad permissions and hard-linked records. It also rejects ancestors that can be replaced or modified by untrusted accounts. Shared temporary directories can fail this check. The store is unavailable on unsupported filesystems or if checks cannot be completed.
+
+The store locks across processes, writes to an exclusive private temporary file, flushes it, and atomically renames it into place. Interrupted runs may leave a temporary file. Recovery removes only validated store-owned temporary entries under the same lock. Invalid committed records return `STORE_CORRUPT` and need offline operator repair. If interruption follows rename, the record may already exist even if the client received no response. List collections to reconcile before retrying. Stop all server instances before deleting or repairing a record. This protects against interrupted processes. Filesystem durability during power loss depends on the operating system and volume.
+
+For packaged integration testing, provide a **disposable, empty, preprovisioned** store and a private fixture configuration file. Run `node scripts/smoke-stdio.mjs target/selenium-mcp-0.5.0.jar --saved-fixture`. The fixture mode replaces that configuration file with a loopback profile and exercises all five saved tools. Use a fresh fixture before repeating with Java 21.0.2 and `--unsupported-runtime`.
+
 ## Architecture and operating limits
 
 The codebase is organized by responsibility under `dev.seleniummcp`:
@@ -389,26 +453,26 @@ The fixtures exercise text entry, click effects, discovery, explicit waits, sele
 
 ## Release build and local client
 
-For a release installation, download `selenium-mcp-0.4.0.jar` and `selenium-mcp-0.4.0.jar.sha256` into the same directory. Compare the JAR's SHA-256 hash with the value in the checksum file before launching it with Java 21. [v0.4.0 release](https://github.com/Nayan76/selenium-ai-mcp-server/releases/tag/v0.4.0)
+For a release installation, download `selenium-mcp-0.5.0.jar` and `selenium-mcp-0.5.0.jar.sha256` into the same directory. Compare the JAR's SHA-256 hash with the value in the checksum file before launching it with Java 21. [v0.5.0 release](https://github.com/Nayan76/selenium-ai-mcp-server/releases/tag/v0.5.0)
 
-Use JDK 21 and Maven 3.9.9 for repeatable local builds. From a fresh checkout, run `mvn -B -ntp clean verify -Dbrowser.test=chrome` (quote `"-Dbrowser.test=chrome"` in PowerShell). The build produces `target/selenium-mcp-0.4.0.jar` and the identical compatibility copy `target/selenium-mcp.jar`. Build and test from the same source, dependency versions, JDK and Maven distribution when comparing release checksums. Maven uses a fixed archive timestamp. The shaded JAR includes the service-provider descriptors and third-party license and notice text.
+Use JDK 21 and Maven 3.9.9 for repeatable local builds. From a fresh checkout, run `mvn -B -ntp clean verify -Dbrowser.test=chrome` (quote `"-Dbrowser.test=chrome"` in PowerShell). The build produces `target/selenium-mcp-0.5.0.jar` and the identical compatibility copy `target/selenium-mcp.jar`. Build and test from the same source, dependency versions, JDK and Maven distribution when comparing release checksums. Maven uses a fixed archive timestamp. The shaded JAR includes the service-provider descriptors and third-party license and notice text.
 
 Launch directly on Linux:
 
 ```sh
-SELENIUM_ALLOWED_ORIGINS=https://example.com java -jar target/selenium-mcp-0.4.0.jar
-sha256sum target/selenium-mcp-0.4.0.jar
+SELENIUM_ALLOWED_ORIGINS=https://example.com java -jar target/selenium-mcp-0.5.0.jar
+sha256sum target/selenium-mcp-0.5.0.jar
 ```
 
 Launch directly on Windows:
 
 ```powershell
 $env:SELENIUM_ALLOWED_ORIGINS = 'https://example.com'
-java -jar target/selenium-mcp-0.4.0.jar
-Get-FileHash target/selenium-mcp-0.4.0.jar -Algorithm SHA256
+java -jar target/selenium-mcp-0.5.0.jar
+Get-FileHash target/selenium-mcp-0.5.0.jar -Algorithm SHA256
 ```
 
-For a desktop MCP client, copy the `mcpServers.selenium` entry from `inspector.json`. Set its second `args` item to the absolute installed JAR path (for example `/opt/selenium-mcp/selenium-mcp-0.4.0.jar` or `C:/Tools/selenium-mcp/selenium-mcp-0.4.0.jar`). Set trusted browser and API origins separately in the entry's `env` object. Restart the client and list tools. Version 0.4.0 advertises 40 tools.
+For a desktop MCP client, copy the `mcpServers.selenium` entry from `inspector.json`. Set its second `args` item to the absolute installed JAR path (for example `/opt/selenium-mcp/selenium-mcp-0.5.0.jar` or `C:/Tools/selenium-mcp/selenium-mcp-0.5.0.jar`). Set trusted browser and API origins separately in the entry's `env` object. Restart the client and list tools. Version 0.5.0 advertises 45 tools.
 
 ### Operational boundaries
 
@@ -428,7 +492,7 @@ mvn -B -ntp org.apache.maven.plugins:maven-dependency-plugin:3.7.0:tree "-Doutpu
 ./scripts/audit-dependencies.ps1
 ```
 
-Run the packaged protocol smoke test with Node.js using `node scripts/smoke-stdio.mjs`. It initializes an actual Java process, checks all 40 tool names and a structured error, exercises API and collection calls against a temporary loopback fixture, and verifies shutdown on stdin EOF.
+Run the packaged protocol smoke test with Node.js using `node scripts/smoke-stdio.mjs`. It initializes an actual Java process, checks all 45 tool names, exercises API and collection calls against a temporary loopback fixture, verifies isolation with saved management unconfigured, and verifies shutdown on stdin EOF.
 
 The check queries OSV with public Maven package coordinates, including transitives and test libraries. It fails on advisory matches or an incomplete response. Browser binaries, build plugins and npm tools need their own update policy.
 

@@ -4,6 +4,7 @@ import dev.seleniummcp.api.ApiRuntime;
 import dev.seleniummcp.api.ApiTools;
 import dev.seleniummcp.browser.BrowserSession;
 import dev.seleniummcp.collection.ApiCollectionTools;
+import dev.seleniummcp.collection.management.SavedCollectionTools;
 import dev.seleniummcp.protocol.ProtocolInput;
 import dev.seleniummcp.reporting.ExecutionHistory;
 import dev.seleniummcp.security.Origins;
@@ -43,10 +44,12 @@ public final class Main {
                 collections.cleanup();
             }
         }, "browser-cleanup"));
-        var server = McpServer.sync(transport).serverInfo("selenium-mcp", "0.4.0")
+        var collectionTools = new ApiCollectionTools(api, collections);
+        var server = McpServer.sync(transport).serverInfo("selenium-mcp", "0.5.0")
                 .tools(new BrowserTools(sessions, origins, history).specifications())
                 .tools(api.specifications())
-                .tools(new ApiCollectionTools(api, collections).specifications()).build();
+                .tools(collectionTools.specifications())
+                .tools(SavedCollectionTools.configured(api, collectionTools).specifications()).build();
         try {
             disconnected.await();
         } finally {

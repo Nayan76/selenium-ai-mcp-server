@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.0
+
+- Added operator-managed API environments and immutable saved collections with status-only execution, environment-only secret resolution, and a bounded private store.
+
 ## 0.4.0
 
 - Added sequential API collections with bounded runtime variables, JSON extraction, assertions, execution history, and sanitized JSON and HTML reports. This release exposes 40 tools.

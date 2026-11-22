@@ -33,13 +33,23 @@ public final class ApiTools implements AutoCloseable {
     }
 
     public CollectionResponse sendCollectionRequest(Map<String, Object> args, String authorizedOrigin, long deadline) {
+        var response = collectionRequest(args, authorizedOrigin, deadline, false);
+        return new CollectionResponse(response.statusCode(), ApiAssertions.Payload.read(response, false));
+    }
+
+    public int sendCollectionStatus(Map<String, Object> args, String authorizedOrigin, long deadline) {
+        return collectionRequest(args, authorizedOrigin, deadline, true).statusCode();
+    }
+
+    private ApiClient.Response collectionRequest(Map<String, Object> args, String authorizedOrigin, long deadline,
+                                                  boolean discardBody) {
         var request = validator.validate(args);
         if (!request.origin().equals(authorizedOrigin)) {
             throw new ToolFailure("API_ORIGIN_DENIED", "The expanded request changed its authorized origin.");
         }
-        var response = client.send(request, deadline);
+        var response = client.send(request, deadline, discardBody);
         if (response.failure() != null) throw response.failure();
-        return new CollectionResponse(response.statusCode(), ApiAssertions.Payload.read(response, false));
+        return response;
     }
 
     public static void validateCollectionPath(String path, boolean extraction) {

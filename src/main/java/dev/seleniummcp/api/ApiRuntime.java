@@ -20,7 +20,7 @@ public final class ApiRuntime {
         return version.feature() == 21 && version.compareToIgnoreOptional(MINIMUM) >= 0 && version.pre().isEmpty();
     }
 
-    static void requireSafeParser() {
+    public static void requireSafeParser() {
         if (!supportsHeaderLimit(Runtime.version())) {
             throw new ToolFailure("API_RUNTIME_UNSUPPORTED", "API requests require Java 21.0.5 or a newer Java 21 update.");
         }

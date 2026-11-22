@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { closeSync, fstatSync, openSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createInterface } from 'node:readline';
 
@@ -14,10 +15,14 @@ const tools = [
   'get_execution_evidence', 'decode_page_barcode', 'assert_barcode_value',
   'execute_data_driven_scenario', 'get_data_driven_results',
   'send_api_request', 'assert_api_status', 'assert_api_response', 'get_api_execution_results',
-  'execute_api_collection', 'get_api_collection_results', 'list_api_collection_executions', 'export_api_collection_report'
+  'execute_api_collection', 'get_api_collection_results', 'list_api_collection_executions', 'export_api_collection_report',
+  'list_api_environments', 'save_api_collection', 'list_saved_api_collections', 'get_saved_api_collection',
+  'execute_saved_api_collection'
 ];
-const jar = process.argv[2] ?? 'target/selenium-mcp-0.4.0.jar';
-const unsupportedRuntime = process.argv[3] === '--unsupported-runtime';
+const jar = process.argv[2] ?? 'target/selenium-mcp-0.5.0.jar';
+const flags = process.argv.slice(3);
+const unsupportedRuntime = flags.includes('--unsupported-runtime');
+const savedFixture = flags.includes('--saved-fixture');
 let fixtureRequests = 0;
 const fixture = createServer((request, response) => {
   fixtureRequests++;
@@ -37,11 +42,34 @@ const fixture = createServer((request, response) => {
 fixture.listen(0, '127.0.0.1');
 await once(fixture, 'listening');
 const origin = `http://127.0.0.1:${fixture.address().port}`;
+const env = {...process.env, SELENIUM_API_ALLOWED_ORIGINS: origin, SELENIUM_API_ALLOW_LOOPBACK: 'true'};
+if (savedFixture) {
+  assert.ok(env.SELENIUM_API_ENVIRONMENTS_FILE && env.SELENIUM_SAVED_COLLECTION_DIR);
+  env.PHASE15_SMOKE_AUTH = 'Bearer fixture-secret';
+  const config = JSON.stringify({
+    schemaVersion: 1,
+    profiles: {dev: {enabled: true, origin, routes: {
+      check: {method: 'GET', path: '/check', secretHeaders: {Authorization: 'PHASE15_SMOKE_AUTH'}},
+      blocked: {method: 'POST', path: '/check'},
+    }}, staging: {origin, routes: {check: {method: 'GET', path: '/check'}}}},
+  });
+  const descriptor = openSync(env.SELENIUM_API_ENVIRONMENTS_FILE, 'r+');
+  try {
+    const stat = fstatSync(descriptor);
+    assert.ok(stat.isFile() && stat.size === 0, 'Provision a new empty smoke fixture configuration file');
+    writeFileSync(descriptor, config);
+  } finally {
+    closeSync(descriptor);
+  }
+} else {
+  delete env.SELENIUM_API_ENVIRONMENTS_FILE;
+  delete env.SELENIUM_SAVED_COLLECTION_DIR;
+}
 // Try an unsafe override so the smoke test also verifies the packaged entry point clamps it.
 const child = spawn('java', ['-Djdk.http.maxHeaderSize=0', '-jar', jar], {
   stdio: ['pipe', 'pipe', 'inherit'],
   windowsHide: true,
-  env: {...process.env, SELENIUM_API_ALLOWED_ORIGINS: origin, SELENIUM_API_ALLOW_LOOPBACK: 'true'},
+  env,
 });
 const closed = once(child, 'close');
 const stop = setTimeout(() => child.kill(), 30000);
@@ -66,7 +94,7 @@ try {
   const init = await request(1, 'initialize', {protocolVersion:'2025-06-18', capabilities:{},
     clientInfo:{name:'release-smoke',version:'1'}});
   assert.equal(init.serverInfo.name, 'selenium-mcp');
-  assert.equal(init.serverInfo.version, '0.4.0');
+  assert.equal(init.serverInfo.version, '0.5.0');
   send({method:'notifications/initialized'});
   const listed = await request(2, 'tools/list');
   assert.deepEqual(listed.tools.map(t => t.name).sort(), tools.sort());
@@ -129,12 +157,54 @@ try {
     assert.equal(fixtureRequests, 5);
   }
   assert.doesNotMatch(JSON.stringify(results), /fixture-secret|access_token|Authorization/);
+  const environments = await request(12, 'tools/call', {name: 'list_api_environments', arguments: {}});
+  if (savedFixture) {
+    assert.deepEqual(environments.structuredContent, {environments: ['dev']});
+    const saved = await request(13, 'tools/call', {name: 'save_api_collection', arguments: {
+      name: 'Saved fixture', requests: [{id: 'check', name: 'Check', route: 'check', expectedStatus: 200}],
+    }});
+    const {collection} = saved.structuredContent;
+    const listedSaved = await request(14, 'tools/call', {name: 'list_saved_api_collections', arguments: {}});
+    assert.equal(listedSaved.structuredContent.collections[0].collectionId, collection.collectionId);
+    const get = await request(15, 'tools/call', {name: 'get_saved_api_collection',
+      arguments: {collectionId: collection.collectionId}});
+    assert.deepEqual(get.structuredContent.collection, collection);
+    const beforeDenial = fixtureRequests;
+    const staging = await request(18, 'tools/call', {name: 'execute_saved_api_collection',
+      arguments: {collectionId: collection.collectionId, environmentId: 'staging'}});
+    assert.equal(staging.isError, true);
+    assert.equal(staging.structuredContent.code, 'ENVIRONMENT_DISABLED');
+    assert.equal(fixtureRequests, beforeDenial);
+    const run = await request(16, 'tools/call', {name: 'execute_saved_api_collection',
+      arguments: {collectionId: collection.collectionId, environmentId: 'dev'}});
+    if (unsupportedRuntime) {
+      assert.equal(run.structuredContent.code, 'API_RUNTIME_UNSUPPORTED');
+      assert.equal(fixtureRequests, 0);
+    } else {
+      assert.equal(run.structuredContent.passed, 1);
+      assert.equal(fixtureRequests, 6);
+      const details = await request(17, 'tools/call', {name: 'get_api_collection_results',
+        arguments: {executionId: run.structuredContent.executionId}});
+      assert.doesNotMatch(JSON.stringify([get, run, details]), /fixture-secret|PHASE15_SMOKE_AUTH|access_token/);
+      const blocked = await request(19, 'tools/call', {name: 'save_api_collection', arguments: {
+        name: 'Blocked mutation', requests: [{id: 'blocked', name: 'Blocked', route: 'blocked', expectedStatus: 200}],
+      }});
+      const denied = await request(20, 'tools/call', {name: 'execute_saved_api_collection',
+        arguments: {collectionId: blocked.structuredContent.collection.collectionId, environmentId: 'dev'}});
+      assert.equal(denied.isError, true);
+      assert.equal(denied.structuredContent.code, 'ROUTE_NOT_ALLOWED');
+      assert.equal(fixtureRequests, 6);
+    }
+  } else {
+    assert.equal(environments.isError, true);
+    assert.equal(environments.structuredContent.code, 'STORE_UNAVAILABLE');
+  }
   child.stdin.end();
   const [code] = await closed;
   assert.equal(code, 0);
   console.log(unsupportedRuntime
-    ? 'Verified initialize, 40 named tools, browser dispatch, API and collection runtime guards, and clean EOF.'
-    : 'Verified initialize, 40 named tools, API and collection round trips, JDK header rejection and clean EOF.');
+    ? 'Verified initialize, 45 named tools, browser dispatch, API runtime guards, and clean EOF.'
+    : 'Verified initialize, 45 named tools, API and collection round trips, JDK header rejection and clean EOF.');
 } finally {
   clearTimeout(stop);
   if (child.exitCode === null && child.signalCode === null) child.kill();

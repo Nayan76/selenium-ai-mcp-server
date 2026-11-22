@@ -10,6 +10,7 @@ import io.modelcontextprotocol.spec.McpSchema.Tool;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 public final class ApiCollectionTools {
     public static final int HISTORY_LIMIT = 32;
@@ -41,6 +42,12 @@ public final class ApiCollectionTools {
     public ApiCollectionTools(ApiTools api, ExecutionHistory history) {
         this.history = history;
         engine = new ApiCollectionEngine(api, history);
+    }
+
+    public record SavedStep(String id, String name, Map<String, Object> request, String origin, int expectedStatus) {}
+
+    public Map<String, Object> executeSaved(String name, boolean stop, int timeout, Supplier<List<SavedStep>> preflight) {
+        return engine.executeSaved(name, stop, timeout, preflight);
     }
 
     public List<SyncToolSpecification> specifications() {

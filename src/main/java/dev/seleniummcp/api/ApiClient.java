@@ -50,6 +50,10 @@ final class ApiClient implements AutoCloseable {
     }
 
     Response send(ApiRequestValidator.Request request, long deadline) {
+        return send(request, deadline, false);
+    }
+
+    Response send(ApiRequestValidator.Request request, long deadline, boolean discardBody) {
         if (!inFlight.tryAcquire()) return failed(null, "API_BUSY", "Too many concurrent API requests.");
         var receivedStatus = new AtomicInteger();
         CompletableFuture<HttpResponse<byte[]>> exchange = null;
@@ -62,7 +66,7 @@ final class ApiClient implements AutoCloseable {
             exchange = http.sendAsync(request.httpRequest(), info -> {
                 receivedStatus.set(info.statusCode());
                 checkHeaders(info);
-                return new LimitedBody();
+                return new LimitedBody(discardBody);
             });
             long budget = request.httpRequest().timeout().orElseThrow().toNanos();
             if (collection) budget = Math.min(budget, Math.max(0, deadline - System.nanoTime()));
@@ -138,6 +142,10 @@ final class ApiClient implements AutoCloseable {
         private final CompletableFuture<byte[]> result = new CompletableFuture<>();
         private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         private Flow.Subscription subscription;
+        private final boolean discard;
+        private int received;
+
+        LimitedBody(boolean discard) { this.discard = discard; }
 
         @Override public CompletionStage<byte[]> getBody() {
             return result;
@@ -150,14 +158,17 @@ final class ApiClient implements AutoCloseable {
 
         @Override public void onNext(List<ByteBuffer> buffers) {
             for (ByteBuffer buffer : buffers) {
-                if (buffer.remaining() > MAX_RESPONSE_BYTES - bytes.size()) {
+                if (buffer.remaining() > MAX_RESPONSE_BYTES - received) {
                     result.completeExceptionally(oversized());
                     subscription.cancel();
                     return;
                 }
-                byte[] chunk = new byte[buffer.remaining()];
-                buffer.get(chunk);
-                bytes.writeBytes(chunk);
+                received += buffer.remaining();
+                if (!discard) {
+                    byte[] chunk = new byte[buffer.remaining()];
+                    buffer.get(chunk);
+                    bytes.writeBytes(chunk);
+                }
             }
             subscription.request(1);
         }

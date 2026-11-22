@@ -72,6 +72,6 @@ jobs:
         if: success() && matrix.browser == 'chrome'
         with:
           name: selenium-mcp-java21
-          path: target/selenium-mcp-0.4.0.jar
+          path: target/selenium-mcp-0.5.0.jar
           retention-days: 7
           if-no-files-found: error

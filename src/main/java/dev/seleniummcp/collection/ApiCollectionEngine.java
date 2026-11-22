@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 final class ApiCollectionEngine {
     private final ApiTools api;
@@ -27,13 +28,27 @@ final class ApiCollectionEngine {
     Map<String, Object> execute(Map<String, Object> args) {
         if (!execution.tryAcquire()) throw new ToolFailure("COLLECTION_BUSY", "Another collection is executing.");
         try {
-            return execute(validator.validate(args));
+            return execute(validator.validate(args), false);
         } finally {
             execution.release();
         }
     }
 
-    private Map<String, Object> execute(CollectionValidator.Plan plan) {
+    Map<String, Object> executeSaved(String name, boolean stop, int timeout,
+                                     Supplier<List<ApiCollectionTools.SavedStep>> preflight) {
+        if (!execution.tryAcquire()) throw new ToolFailure("COLLECTION_BUSY", "Another collection is executing.");
+        try {
+            var requests = preflight.get().stream().map(step -> new CollectionValidator.Request(step.id(),
+                    step.name(), step.request(), step.origin(),
+                    List.of(new CollectionValidator.Assertion(step.expectedStatus(), null, "status", false, null)),
+                    Map.of())).toList();
+            return execute(new CollectionValidator.Plan(name, requests, Map.of(), stop, timeout), true);
+        } finally {
+            execution.release();
+        }
+    }
+
+    private Map<String, Object> execute(CollectionValidator.Plan plan, boolean statusOnly) {
         String id = UUID.randomUUID().toString();
         Instant started = Instant.now();
         long start = System.nanoTime();
@@ -42,7 +57,7 @@ final class ApiCollectionEngine {
         var rows = new ArrayList<Map<String, Object>>();
         int passed = 0, failed = 0, errors = 0;
         for (var request : plan.requests()) {
-            var row = executeRequest(request, values, deadline);
+            var row = executeRequest(request, values, deadline, statusOnly);
             rows.add(row);
             switch ((String) row.get("status")) {
                 case "PASS" -> passed++;
@@ -72,7 +87,7 @@ final class ApiCollectionEngine {
     }
 
     private Map<String, Object> executeRequest(CollectionValidator.Request request, Map<String, String> values,
-                                               long deadline) {
+                                               long deadline, boolean statusOnly) {
         var row = new LinkedHashMap<String, Object>();
         row.put("id", request.id());
         row.put("name", request.name());
@@ -82,13 +97,15 @@ final class ApiCollectionEngine {
         long start = System.nanoTime();
         try {
             checkDeadline(deadline);
-            var response = api.sendCollectionRequest(CollectionValidator.expand(request.http(), values),
-                    request.origin(), deadline);
-            row.put("statusCode", response.statusCode());
+            ApiTools.CollectionResponse response = statusOnly ? null : api.sendCollectionRequest(
+                    CollectionValidator.expand(request.http(), values), request.origin(), deadline);
+            int statusCode = statusOnly ? api.sendCollectionStatus(request.http(), request.origin(), deadline)
+                    : response.statusCode();
+            row.put("statusCode", statusCode);
             for (var rule : request.assertions()) {
                 checkDeadline(deadline);
                 try {
-                    boolean passed = rule.status() != null ? rule.status() == response.statusCode()
+                    boolean passed = rule.status() != null ? rule.status() == statusCode
                             : response.assertJson(rule.path(), rule.type(), rule.hasExpected(), rule.expected());
                     assertions.add(Map.of("type", rule.type(), "status", passed ? "PASS" : "FAIL"));
                     if (!passed && status.equals("PASS")) status = "FAIL";
@@ -98,7 +115,7 @@ final class ApiCollectionEngine {
                 }
             }
             if (status.equals("PASS") && !request.extract().isEmpty()) {
-                if (response.statusCode() < 200 || response.statusCode() > 299) {
+                if (statusCode < 200 || statusCode > 299) {
                     throw new ToolFailure("COLLECTION_EXTRACTION_STATUS", "Extraction requires an HTTP 2xx response.");
                 }
                 var extracted = new LinkedHashMap<String, String>();
