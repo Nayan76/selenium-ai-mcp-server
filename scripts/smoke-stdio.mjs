@@ -13,13 +13,19 @@ const tools = [
   'get_test_execution_results', 'list_test_executions', 'get_test_execution', 'export_test_report',
   'get_execution_evidence', 'decode_page_barcode', 'assert_barcode_value',
   'execute_data_driven_scenario', 'get_data_driven_results',
-  'send_api_request', 'assert_api_status', 'assert_api_response', 'get_api_execution_results'
+  'send_api_request', 'assert_api_status', 'assert_api_response', 'get_api_execution_results',
+  'execute_api_collection', 'get_api_collection_results', 'list_api_collection_executions', 'export_api_collection_report'
 ];
-const jar = process.argv[2] ?? 'target/selenium-mcp-0.3.0.jar';
+const jar = process.argv[2] ?? 'target/selenium-mcp-0.4.0.jar';
 const unsupportedRuntime = process.argv[3] === '--unsupported-runtime';
 let fixtureRequests = 0;
 const fixture = createServer((request, response) => {
   fixtureRequests++;
+  if (request.url === '/check' && request.headers.authorization !== 'Bearer fixture-secret') {
+    response.writeHead(401);
+    response.end();
+    return;
+  }
   if (request.url === '/single-header') response.setHeader('X-Large', 'a'.repeat(17 * 1024));
   if (request.url === '/combined-headers') {
     response.setHeader('X-First', 'a'.repeat(9 * 1024));
@@ -60,7 +66,7 @@ try {
   const init = await request(1, 'initialize', {protocolVersion:'2025-06-18', capabilities:{},
     clientInfo:{name:'release-smoke',version:'1'}});
   assert.equal(init.serverInfo.name, 'selenium-mcp');
-  assert.equal(init.serverInfo.version, '0.3.0');
+  assert.equal(init.serverInfo.version, '0.4.0');
   send({method:'notifications/initialized'});
   const listed = await request(2, 'tools/list');
   assert.deepEqual(listed.tools.map(t => t.name).sort(), tools.sort());
@@ -100,12 +106,35 @@ try {
     }
     assert.equal(fixtureRequests, 3);
   }
+  const collection = await request(10, 'tools/call', {
+    name: 'execute_api_collection', arguments: {
+      collectionName: 'Fixture chain',
+      requests: [
+        {id: 'login', name: 'Login', method: 'GET', url: origin + '/login', extract: {token: '$.access_token'}},
+        {
+          id: 'check', name: 'Check', method: 'GET', url: origin + '/check',
+          headers: {Authorization: 'Bearer {{token}}'}, assertions: [{type: 'status', expectedStatus: 200}],
+        },
+      ],
+    },
+  });
+  const results = await request(11, 'tools/call', {
+    name: 'get_api_collection_results', arguments: {executionId: collection.structuredContent.executionId},
+  });
+  if (unsupportedRuntime) {
+    assert.equal(results.structuredContent.requests[0].code, 'API_RUNTIME_UNSUPPORTED');
+    assert.equal(fixtureRequests, 0);
+  } else {
+    assert.equal(results.structuredContent.passed, 2);
+    assert.equal(fixtureRequests, 5);
+  }
+  assert.doesNotMatch(JSON.stringify(results), /fixture-secret|access_token|Authorization/);
   child.stdin.end();
   const [code] = await closed;
   assert.equal(code, 0);
   console.log(unsupportedRuntime
-    ? 'Verified initialize, 36 named tools, browser dispatch, API runtime guard with no fixture request, and clean EOF.'
-    : 'Verified initialize, 36 named tools, API round trip, JDK header rejection and clean EOF.');
+    ? 'Verified initialize, 40 named tools, browser dispatch, API and collection runtime guards, and clean EOF.'
+    : 'Verified initialize, 40 named tools, API and collection round trips, JDK header rejection and clean EOF.');
 } finally {
   clearTimeout(stop);
   if (child.exitCode === null && child.signalCode === null) child.kill();

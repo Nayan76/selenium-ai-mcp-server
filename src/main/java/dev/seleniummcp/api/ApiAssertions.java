@@ -36,6 +36,10 @@ final class ApiAssertions {
 
     record Payload(String kind, int bytes, JsonNode json) {
         static Payload read(ApiClient.Response response) {
+            return read(response, true);
+        }
+
+        static Payload read(ApiClient.Response response, boolean redact) {
             byte[] body = response.body();
             if (body.length == 0) return new Payload("EMPTY", 0, null);
             if (!response.media().equals("JSON")) return new Payload(response.media(), body.length, null);
@@ -44,7 +48,7 @@ final class ApiAssertions {
                 if (json == null || json.isMissingNode() || !supportedNumbers(json)) {
                     return new Payload("INVALID_JSON", body.length, null);
                 }
-                removeSensitiveFields(json);
+                if (redact) removeSensitiveFields(json);
                 return new Payload("JSON", body.length, json);
             } catch (JacksonException | IllegalArgumentException ignored) {
                 return new Payload("INVALID_JSON", body.length, null);
@@ -73,7 +77,7 @@ final class ApiAssertions {
         if (hasExpected != needsExpected) {
             throw ApiRequestValidator.invalid("Supply expected only for equals, contains and type.");
         }
-        JsonNode value = resolve(payload == null ? null : payload.json(), expression);
+        JsonNode value = resolve(payload == null ? null : payload.json(), expression, true);
         if (payload == null) throw new ToolFailure("API_RESPONSE_UNAVAILABLE", "No API response body is available.");
         if (payload.kind().equals("INVALID_JSON")) {
             throw new ToolFailure("API_INVALID_JSON", "The response JSON is malformed or exceeds JSON parser limits.");
@@ -89,14 +93,42 @@ final class ApiAssertions {
         };
     }
 
-    private static JsonNode resolve(JsonNode value, String expression) {
+    static void validatePath(String expression, boolean protectFields) {
+        if (expression.length() > MAX_PATH || !expression.startsWith("$")) throw unsupportedPath();
+        resolve(null, expression, protectFields);
+    }
+
+    static void validateExpectation(String type, boolean present, Object expected) {
+        if (!TYPES.contains(type) || present != (!type.equals("exists") && !type.equals("not_exists"))) {
+            throw ApiRequestValidator.invalid("Invalid JSON assertion type or expectation.");
+        }
+        if (type.equals("type")) matchesType(null, expected);
+        if (type.equals("equals") || type.equals("contains")) rejectExpectedTemplates(expectedJson(expected));
+    }
+
+    private static void rejectExpectedTemplates(JsonNode node) {
+        if ((node.isString() && node.asString().contains("{{"))
+                || node.properties().stream().anyMatch(entry -> entry.getKey().contains("{{"))) {
+            throw ApiRequestValidator.invalid("Assertion expectations do not support collection templates.");
+        }
+        for (JsonNode child : node) rejectExpectedTemplates(child);
+    }
+
+    static String extract(Payload payload, String expression) {
+        if (payload.json() == null) throw new ToolFailure("API_EXTRACTION_NOT_JSON", "Extraction requires valid JSON.");
+        JsonNode value = resolve(payload.json(), expression, false);
+        if (value == null) throw new ToolFailure("API_EXTRACTION_MISSING", "The extraction path was not found.");
+        return value.isString() ? value.asString() : JSON.writeValueAsString(value);
+    }
+
+    private static JsonNode resolve(JsonNode value, String expression, boolean protectFields) {
         var matcher = SEGMENT.matcher(expression);
         int offset = 1;
         int segments = 0;
         while (offset < expression.length()) {
             if (++segments > 24 || !matcher.region(offset, expression.length()).lookingAt()) throw unsupportedPath();
             String field = matcher.group(1);
-            if (field != null && sensitive(field)) {
+            if (field != null && protectFields && sensitive(field)) {
                 throw new ToolFailure("API_SENSITIVE_PATH", "Assertions cannot access protected JSON fields.");
             }
             if (value != null) {
@@ -157,7 +189,7 @@ final class ApiAssertions {
         return value != null && type.equals(value.getNodeType().name().toLowerCase(Locale.ROOT));
     }
 
-    private static void removeSensitiveFields(JsonNode node) {
+    static void removeSensitiveFields(JsonNode node) {
         if (node.isObject()) node.properties().removeIf(entry -> sensitive(entry.getKey()));
         for (JsonNode child : node) removeSensitiveFields(child);
     }

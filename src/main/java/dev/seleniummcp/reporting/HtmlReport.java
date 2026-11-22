@@ -21,6 +21,7 @@ final class HtmlReport {
             """;
 
     static String render(Map<String, Object> report) {
+        if ("api_collection".equals(report.get("type"))) return renderCollection(report);
         if ("data_driven".equals(report.get("type"))) {
             return renderDataDriven(report);
         }
@@ -42,6 +43,33 @@ final class HtmlReport {
         html.append("</section>");
         appendConsole(html, report);
         return html.append("</main></body></html>").toString();
+    }
+
+    private static String renderCollection(Map<String, Object> report) {
+        var html = new StringBuilder(HEAD);
+        html.append("<header><h1>").append(escape(report.get("collectionName"))).append("</h1>")
+            .append(badge(report.get("status")));
+        for (String key : List.of("executionId", "startedAt", "endedAt", "durationMs",
+                "requestCount", "passed", "failed", "errors", "skipped")) {
+            html.append("<p>").append(key).append(" <code>").append(escape(report.get(key))).append("</code></p>");
+        }
+        html.append("</header><section class=\"table\"><table><thead><tr><th>Request</th><th>Result</th>")
+            .append("<th>HTTP status</th><th>Duration (ms)</th><th>Assertions</th></tr></thead><tbody>");
+        for (Object item : (List<?>) report.get("requests")) {
+            var row = (Map<?, ?>) item;
+            html.append("<tr><td>").append(escape(row.get("method"))).append(" ").append(escape(row.get("name")))
+                .append(" <code>").append(escape(row.get("id"))).append("</code></td><td>")
+                .append(badge(row.get("status"))).append(" ").append(escape(row.get("code"))).append("</td><td>")
+                .append(escape(row.get("statusCode"))).append("</td><td>").append(escape(row.get("durationMs")))
+                .append("</td><td>");
+            for (Object itemResult : (List<?>) row.get("assertions")) {
+                var result = (Map<?, ?>) itemResult;
+                html.append("<div>").append(escape(result.get("type"))).append(" ").append(badge(result.get("status")))
+                    .append(" ").append(escape(result.get("code"))).append("</div>");
+            }
+            html.append("</td></tr>");
+        }
+        return html.append("</tbody></table></section></body></html>").toString();
     }
 
     private static String renderDataDriven(Map<String, Object> report) {

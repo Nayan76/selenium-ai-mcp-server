@@ -28,6 +28,10 @@ public final class ExecutionHistory {
         } catch (NumberFormatException e) {
             throw new IllegalArgumentException("SELENIUM_HISTORY_LIMIT must be 1–200.");
         }
+        return configured(count);
+    }
+
+    public static ExecutionHistory configured(int count) {
         long mib = setting("SELENIUM_ARTIFACT_MAX_MIB", 256, 65536);
         long hours = setting("SELENIUM_ARTIFACT_MAX_AGE_HOURS", 168, 87600);
         return new ExecutionHistory(Path.of(System.getenv().getOrDefault("SELENIUM_ARTIFACT_DIR", "selenium-artifacts")),
@@ -202,6 +206,16 @@ public final class ExecutionHistory {
         return records.reversed().values().stream().map(r -> Map.of(
                 "executionId", r.get("executionId"), "id", r.get("id"), "status", r.get("status"),
                 "endedAt", r.get("endedAt"), "durationMs", r.get("durationMs"))).toList();
+    }
+
+    public synchronized List<Map<String, Object>> collectionSummaries(int limit) {
+        return records.reversed().values().stream().filter(record -> "api_collection".equals(record.get("type")))
+                .limit(limit).map(record -> {
+                    var summary = new LinkedHashMap<>(record);
+                    summary.remove("requests");
+                    summary.remove("type");
+                    return Map.copyOf(summary);
+                }).toList();
     }
 
     public synchronized Map<String, Object> screenshot(UUID id, int step, byte[] png) throws IOException {

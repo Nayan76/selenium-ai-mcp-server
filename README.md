@@ -1,6 +1,6 @@
 # Selenium MCP Server
 
-Control one Chrome, Firefox, or Edge session from an MCP client over stdio. Version 0.3.0 exposes 36 tools, including 32 browser and scenario tools and four REST API testing tools. The browser tools share a fresh profile and run headlessly by default.
+Control one Chrome, Firefox, or Edge session from an MCP client over stdio. Version 0.4.0 exposes 40 tools, including four new API collection tools. The browser tools share a fresh profile and run headlessly by default.
 
 ## Build and run
 
@@ -25,7 +25,7 @@ npx --yes @modelcontextprotocol/inspector@2.16.0 --cli --config inspector.json -
 npx --yes @modelcontextprotocol/inspector@2.16.0 --cli --config inspector.json --server selenium --method tools/call --tool-name get_page_text
 ```
 
-Expect 36 tools from the first command and a structured `NO_SESSION` error from the second. Each CLI invocation launches a new process. For a sequence of browser or API operations, start the interactive Inspector and keep the connection open:
+Expect 40 tools from v0.4.0 and a structured `NO_SESSION` error from the second command. Each CLI invocation launches a new process. For a sequence of browser or API operations, start the interactive Inspector and keep the connection open:
 
 ```powershell
 npx --yes @modelcontextprotocol/inspector@2.16.0 --web --config inspector.json --server selenium
@@ -298,6 +298,64 @@ Assume the loopback fixture serves `{"ready":true}` as JSON at `/api/health`, an
 
 A completed send includes fields such as `{"status":"COMPLETED","statusCode":200,"response":{"kind":"JSON","bytes":14,"shape":{"type":"object","size":1,"children":[{"type":"boolean"}]}}}`. The assertion results each include `"status":"PASS"`. The history result includes both outcomes in `assertions`. Close the browser with `close_browser` when finished.
 
+## API collections
+
+Collections use the REST API client, configuration, and patched Java 21 requirement above. Collection tools are available starting in v0.4.0.
+
+| Tool | Required arguments | Optional arguments |
+| --- | --- | --- |
+| `execute_api_collection` | `collectionName` (1–80 characters), `requests` (1–20 request objects) | `variables` (up to 20 string values), `stopOnFailure` (boolean, default true), `timeoutSeconds` (integer 1–120, default 60) |
+| `get_api_collection_results` | `executionId` (server-generated lowercase UUID) | |
+| `list_api_collection_executions` | | `limit` (integer 1–32, default 10) |
+| `export_api_collection_report` | `executionId` (server-generated lowercase UUID), `format` (`json` or `html`) | |
+
+A request requires a unique `id` matching `[A-Za-z0-9_-]{1,64}`, a `name` of 1–80 characters, a `method` (`GET`, `POST`, `PUT`, `PATCH`, or `DELETE`), and a `url` of 1–2,048 characters. Optional `headers`, `body`, and `timeoutSeconds` follow the single-request API limits. Optional `assertions` is an array of up to 10 objects. Optional `extract` maps variable names to JSON paths of 1–256 characters. Collection, request, and assertion objects reject unknown fields.
+
+- Status assertion example `{"type":"status","expectedStatus":201}`. The expected status is an integer from 100 to 599.
+- JSON assertion example `{"type":"json","jsonPath":"$.active","assertionType":"equals","expected":true}`. Paths and operations follow the single-request JSON assertion rules. Supply `expected` for `equals`, `contains`, and `type`. Omit it for `exists` and `not_exists`.
+- The engine validates the entire plan before the first exchange. Values obtained at runtime are checked again before dispatch. Requests run in array order under the collection deadline and their own timeouts. HTTP 4xx and 5xx are completed responses. With neither assertions nor extraction, a completed exchange passes. Failed assertions produce `FAIL`. Transport, assertion evaluation, or extraction errors produce `ERROR`. The overall status reflects the highest severity. The collection deadline and unsupported runtime stop the run regardless of `stopOnFailure`.
+
+### Variables and extraction
+
+Use `{{variableName}}` in URL paths and queries, request bodies, and values of `Authorization`, `X-Api-Key`, and `X-Request-Id`. Variable names match `[A-Za-z_][A-Za-z0-9_]{0,63}`. The URL authority must be literal and authorized. Substitutions in URL paths and queries are percent-encoded as component data. Header and body values are inserted as text. Templates expand once. References must point to initial values or variables declared by an earlier request, and variables cannot be reassigned. Each value is bounded to 4,096 UTF-8 bytes, with up to 20 extractions per collection.
+
+Extraction uses the same restricted path syntax and can extract credentials for later requests. Results become available only when an HTTP 2xx response passes its assertions and every extraction in that request succeeds. A missing member is an error. JSON null becomes the text `null`. Strings use their decoded text and other JSON values use compact JSON syntax. A body template must place these values in a syntactically appropriate position. Use trusted endpoints and place credentials in authorization headers. Values inserted into URLs or bodies are sent to the authorized endpoint and may be logged there.
+
+Results include public labels, statuses, timings, and fixed diagnostic codes. Use public labels for `collectionName`, request `id`, and request `name`. Headers, URLs, paths used in assertions or extraction, variable values, and bodies are excluded from collection results. One collection runs at a time and history holds the latest 32 runs for the current process. JSON and standalone HTML reports use server-chosen filenames under the existing private artifact root, with the same quotas, ownership receipts, and eviction rules.
+
+### Login, create, and verify
+
+With a trusted fixture at the configured loopback origin, call `execute_api_collection` with:
+
+```json
+{
+  "collectionName": "Create a fixture item",
+  "requests": [
+    {
+      "id": "login", "name": "Login", "method": "POST",
+      "url": "http://127.0.0.1:8080/login",
+      "extract": {"token": "$.token"}
+    },
+    {
+      "id": "create", "name": "Create item", "method": "POST",
+      "url": "http://127.0.0.1:8080/items",
+      "headers": {"Authorization": "Bearer {{token}}"},
+      "body": "{\"name\":\"fixture\"}",
+      "assertions": [{"type": "status", "expectedStatus": 201}],
+      "extract": {"itemId": "$.id"}
+    },
+    {
+      "id": "verify", "name": "Verify item", "method": "GET",
+      "url": "http://127.0.0.1:8080/items/{{itemId}}",
+      "headers": {"Authorization": "Bearer {{token}}"},
+      "assertions": [{"type": "json", "jsonPath": "$.name", "assertionType": "equals", "expected": "fixture"}]
+    }
+  ]
+}
+```
+
+Pass the returned `executionId` to results or export. The engine supports sequential requests with no scripts, branching, automatic rollback, or response replay. A timeout does not undo effects already accepted by an endpoint. The network restrictions and limits in the REST API section also apply to collections.
+
 ## Architecture and operating limits
 
 The codebase is organized by responsibility under `dev.seleniummcp`:
@@ -306,6 +364,7 @@ The codebase is organized by responsibility under `dev.seleniummcp`:
 - `dev.seleniummcp.protocol` (`ProtocolInput`): enforces the pre-decoding 4 MiB JSON-RPC message boundary.
 - `dev.seleniummcp.tools` (`BrowserTools`, `AdvancedTools`, `AssertionsTool`, `BarcodeTools`): defines the 32 MCP tool schemas, validates calls, maps errors, and runs bounded explicit waits.
 - `dev.seleniummcp.api` (`ApiTools`, `ApiRequestValidator`, `ApiClient`, `ApiAssertions`, `ApiExecutionHistory`): registers four API tools, validates origin and request inputs, bounds HTTP exchanges, evaluates JSON assertions, and retains sanitized process-local results.
+- `dev.seleniummcp.collection` (`ApiCollectionTools`, `CollectionValidator`, `ApiCollectionEngine`): registers collection tools, validates plans and templates, and runs sequential requests using the existing API and artifact services.
 - `dev.seleniummcp.engine` (`ScenarioEngine`, `DataDrivenEngine`): prevalidates and executes sequential and parameterized data-driven scenarios under shared session locking and scenario deadlines.
 - `dev.seleniummcp.browser` (`BrowserSession`, `BrowserEvidence`): owns WebDriver lifecycle, serializes commands with teardown, and captures viewport-verified screenshots and redacted console diagnostics.
 - `dev.seleniummcp.reporting` (`ExecutionHistory`, `HtmlReport`): retains bounded process-local execution history and exports redacted JSON and standalone HTML reports.
@@ -330,26 +389,26 @@ The fixtures exercise text entry, click effects, discovery, explicit waits, sele
 
 ## Release build and local client
 
-For a release installation, download `selenium-mcp-0.3.0.jar` and `selenium-mcp-0.3.0.jar.sha256` into the same directory. Compare the JAR's SHA-256 hash with the value in the checksum file before launching it with Java 21. [v0.3.0 release](https://github.com/Nayan76/selenium-ai-mcp-server/releases/tag/v0.3.0)
+For a release installation, download `selenium-mcp-0.4.0.jar` and `selenium-mcp-0.4.0.jar.sha256` into the same directory. Compare the JAR's SHA-256 hash with the value in the checksum file before launching it with Java 21. [v0.4.0 release](https://github.com/Nayan76/selenium-ai-mcp-server/releases/tag/v0.4.0)
 
-Use JDK 21 and Maven 3.9.9 for repeatable local builds. From a fresh checkout, run `mvn -B -ntp clean verify -Dbrowser.test=chrome` (quote `"-Dbrowser.test=chrome"` in PowerShell). The build produces `target/selenium-mcp-0.3.0.jar` and the identical compatibility copy `target/selenium-mcp.jar`. Build and test from the same source, dependency versions, JDK and Maven distribution when comparing release checksums. Maven uses a fixed archive timestamp. The shaded JAR includes the service-provider descriptors and third-party license and notice text.
+Use JDK 21 and Maven 3.9.9 for repeatable local builds. From a fresh checkout, run `mvn -B -ntp clean verify -Dbrowser.test=chrome` (quote `"-Dbrowser.test=chrome"` in PowerShell). The build produces `target/selenium-mcp-0.4.0.jar` and the identical compatibility copy `target/selenium-mcp.jar`. Build and test from the same source, dependency versions, JDK and Maven distribution when comparing release checksums. Maven uses a fixed archive timestamp. The shaded JAR includes the service-provider descriptors and third-party license and notice text.
 
 Launch directly on Linux:
 
 ```sh
-SELENIUM_ALLOWED_ORIGINS=https://example.com java -jar target/selenium-mcp-0.3.0.jar
-sha256sum target/selenium-mcp-0.3.0.jar
+SELENIUM_ALLOWED_ORIGINS=https://example.com java -jar target/selenium-mcp-0.4.0.jar
+sha256sum target/selenium-mcp-0.4.0.jar
 ```
 
 Launch directly on Windows:
 
 ```powershell
 $env:SELENIUM_ALLOWED_ORIGINS = 'https://example.com'
-java -jar target/selenium-mcp-0.3.0.jar
-Get-FileHash target/selenium-mcp-0.3.0.jar -Algorithm SHA256
+java -jar target/selenium-mcp-0.4.0.jar
+Get-FileHash target/selenium-mcp-0.4.0.jar -Algorithm SHA256
 ```
 
-For a desktop MCP client, copy the `mcpServers.selenium` entry from `inspector.json`. Set its second `args` item to the absolute installed JAR path (for example `/opt/selenium-mcp/selenium-mcp-0.3.0.jar` or `C:/Tools/selenium-mcp/selenium-mcp-0.3.0.jar`). Set trusted browser and API origins separately in the entry's `env` object. Restart the client and list tools. Version 0.3.0 advertises 36 tools.
+For a desktop MCP client, copy the `mcpServers.selenium` entry from `inspector.json`. Set its second `args` item to the absolute installed JAR path (for example `/opt/selenium-mcp/selenium-mcp-0.4.0.jar` or `C:/Tools/selenium-mcp/selenium-mcp-0.4.0.jar`). Set trusted browser and API origins separately in the entry's `env` object. Restart the client and list tools. Version 0.4.0 advertises 40 tools.
 
 ### Operational boundaries
 
@@ -369,7 +428,7 @@ mvn -B -ntp org.apache.maven.plugins:maven-dependency-plugin:3.7.0:tree "-Doutpu
 ./scripts/audit-dependencies.ps1
 ```
 
-Run the packaged protocol smoke test with Node.js using `node scripts/smoke-stdio.mjs`. It initializes an actual Java process, checks all 36 tool names and a structured error, exercises the four API tools against a temporary loopback fixture, and verifies shutdown on stdin EOF.
+Run the packaged protocol smoke test with Node.js using `node scripts/smoke-stdio.mjs`. It initializes an actual Java process, checks all 40 tool names and a structured error, exercises API and collection calls against a temporary loopback fixture, and verifies shutdown on stdin EOF.
 
 The check queries OSV with public Maven package coordinates, including transitives and test libraries. It fails on advisory matches or an incomplete response. Browser binaries, build plugins and npm tools need their own update policy.
 

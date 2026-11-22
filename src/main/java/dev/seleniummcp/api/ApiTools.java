@@ -27,6 +27,54 @@ public final class ApiTools implements AutoCloseable {
         client = new ApiClient();
     }
 
+    /** Collection calls share the request validator, client, and concurrency limit. */
+    public String validateCollectionRequest(Map<String, Object> args) {
+        return validator.validate(args).origin();
+    }
+
+    public CollectionResponse sendCollectionRequest(Map<String, Object> args, String authorizedOrigin, long deadline) {
+        var request = validator.validate(args);
+        if (!request.origin().equals(authorizedOrigin)) {
+            throw new ToolFailure("API_ORIGIN_DENIED", "The expanded request changed its authorized origin.");
+        }
+        var response = client.send(request, deadline);
+        if (response.failure() != null) throw response.failure();
+        return new CollectionResponse(response.statusCode(), ApiAssertions.Payload.read(response, false));
+    }
+
+    public static void validateCollectionPath(String path, boolean extraction) {
+        ApiAssertions.validatePath(path, !extraction);
+    }
+
+    public static void validateCollectionExpectation(String type, boolean present, Object value) {
+        ApiAssertions.validateExpectation(type, present, value);
+    }
+
+    public static final class CollectionResponse {
+        private final int statusCode;
+        private final ApiAssertions.Payload payload;
+
+        private CollectionResponse(int statusCode, ApiAssertions.Payload payload) {
+            this.statusCode = statusCode;
+            this.payload = payload;
+        }
+
+        public int statusCode() { return statusCode; }
+
+        public String extract(String path) {
+            ApiAssertions.validatePath(path, false);
+            return ApiAssertions.extract(payload, path);
+        }
+
+        public boolean assertJson(String path, String type, boolean present, Object expected) {
+            // Compare a redacted copy. Extraction can deliberately access credentials for later requests.
+            var json = payload.json() == null ? null : payload.json().deepCopy();
+            if (json != null) ApiAssertions.removeSensitiveFields(json);
+            return ApiAssertions.evaluate(new ApiAssertions.Payload(payload.kind(), payload.bytes(), json),
+                    path, type, present, expected);
+        }
+    }
+
     public List<SyncToolSpecification> specifications() {
         return List.of(
                 tool("send_api_request", "Send an HTTP request to an explicitly allowed API origin.",

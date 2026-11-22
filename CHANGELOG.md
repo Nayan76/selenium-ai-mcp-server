@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0
+
+- Added sequential API collections with bounded runtime variables, JSON extraction, assertions, execution history, and sanitized JSON and HTML reports. This release exposes 40 tools.
+
 ## 0.3.0
 
 - API requests require Java 21.0.5 or a later Java 21 update. The stdio entry point caps JDK response-header parsing at 16 KiB before HTTP client initialization. Browser tools remain available on older Java 21 runtimes.

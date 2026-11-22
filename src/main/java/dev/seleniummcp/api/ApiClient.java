@@ -46,16 +46,27 @@ final class ApiClient implements AutoCloseable {
     record Response(Integer statusCode, String media, byte[] body, ToolFailure failure) {}
 
     Response send(ApiRequestValidator.Request request) {
+        return send(request, Long.MAX_VALUE);
+    }
+
+    Response send(ApiRequestValidator.Request request, long deadline) {
         if (!inFlight.tryAcquire()) return failed(null, "API_BUSY", "Too many concurrent API requests.");
         var receivedStatus = new AtomicInteger();
         CompletableFuture<HttpResponse<byte[]>> exchange = null;
         try {
-            exchange = httpClient().sendAsync(request.httpRequest(), info -> {
+            var http = httpClient();
+            boolean collection = deadline != Long.MAX_VALUE;
+            if (collection && deadline - System.nanoTime() <= 0) {
+                return failed(null, "API_TIMEOUT", "The API request exceeded its deadline.");
+            }
+            exchange = http.sendAsync(request.httpRequest(), info -> {
                 receivedStatus.set(info.statusCode());
                 checkHeaders(info);
                 return new LimitedBody();
             });
-            var response = exchange.get(request.httpRequest().timeout().orElseThrow().toMillis(), TimeUnit.MILLISECONDS);
+            long budget = request.httpRequest().timeout().orElseThrow().toNanos();
+            if (collection) budget = Math.min(budget, Math.max(0, deadline - System.nanoTime()));
+            var response = exchange.get(budget, TimeUnit.NANOSECONDS);
             String contentType = response.headers().firstValue("Content-Type").orElse("")
                     .split(";", 2)[0].strip().toLowerCase(Locale.ROOT);
             String media = contentType.equals("application/json") || contentType.matches("application/[a-z0-9._+-]+\\+json")
