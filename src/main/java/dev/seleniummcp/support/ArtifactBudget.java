@@ -1,9 +1,9 @@
-package dev.seleniummcp;
+package dev.seleniummcp.support;
 
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.file.*;
-import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.*;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
@@ -15,30 +15,44 @@ import static java.nio.file.LinkOption.NOFOLLOW_LINKS;
 import static java.nio.file.StandardOpenOption.*;
 
 /** A receipt binds one generated path to the bytes actually installed there. All mutations use the root lock. */
-final class ArtifactBudget {
+public final class ArtifactBudget {
+    public static final int MAX_IMAGE = 4 * 1024 * 1024;
+    public static final int MAX_DATASETS = 20;
     private static final Pattern RECEIPT = Pattern.compile(
-            "([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:-(?:[1-9]|[12][0-9]|3[0-2])\\.png|\\.(?:html|json)))\\.([0-9a-f]{64})\\.receipt");
+            "([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:-(?:d(?:[1-9]|1[0-9]|20)-)?(?:[1-9]|[12][0-9]|3[0-2])\\.png|\\.(?:html|json)))\\.([0-9a-f]{64})\\.receipt");
     private static final Pattern SESSION = Pattern.compile("session-v5-([0-9]+)-([0-9]+)-[0-9]+");
     private final Path base;
     private final long maxBytes;
     private final Duration maxAge;
 
-    ArtifactBudget(Path base, long maxBytes, Duration maxAge) {
+    public ArtifactBudget(Path base, long maxBytes, Duration maxAge) {
         if (maxBytes <= 0 || maxAge.isNegative() || maxAge.isZero()) throw new IllegalArgumentException("Invalid artifact limits.");
         this.base = base;
         this.maxBytes = maxBytes;
         this.maxAge = maxAge;
     }
 
-    static String sessionPrefix() {
+    public static String sessionPrefix() {
         var self = ProcessHandle.current();
         return "session-v5-" + self.pid() + "-" + self.info().startInstant().orElseThrow().toEpochMilli() + "-";
     }
 
-    interface Operation<T> { T run() throws IOException; }
+    public static void checkDirectory(Path path) throws IOException {
+        if (!Files.isDirectory(path, NOFOLLOW_LINKS) || !path.toRealPath().equals(path)) {
+            throw new IOException("Artifact path must be a real directory.");
+        }
+    }
 
-    <T> T locked(Operation<T> operation) throws IOException {
-        ExecutionHistory.checkDirectory(base);
+    public static FileAttribute<?>[] permissions(Path parent, String mask) throws IOException {
+        return Files.getFileStore(parent).supportsFileAttributeView(PosixFileAttributeView.class)
+                ? new FileAttribute<?>[]{PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString(mask))}
+                : new FileAttribute<?>[0];
+    }
+
+    public interface Operation<T> { T run() throws IOException; }
+
+    public <T> T locked(Operation<T> operation) throws IOException {
+        checkDirectory(base);
         // Non-blocking lock avoids a hung peer delaying browser operations.
         try (var channel = FileChannel.open(base.resolve(".selenium-budget.lock"), CREATE, WRITE, NOFOLLOW_LINKS);
              var lock = channel.tryLock()) {
@@ -51,15 +65,15 @@ final class ArtifactBudget {
 
     private record Receipt(Path file, Path marker, String hash, long size, Instant time, boolean removable) {
         boolean matches() throws IOException {
-            if (!Files.isRegularFile(file, NOFOLLOW_LINKS) || Files.size(file) > ExecutionHistory.MAX_IMAGE) return false;
+            if (!Files.isRegularFile(file, NOFOLLOW_LINKS) || Files.size(file) > MAX_IMAGE) return false;
             try (var input = Files.newInputStream(file, READ, NOFOLLOW_LINKS)) {
-                byte[] bytes = input.readNBytes(ExecutionHistory.MAX_IMAGE + 1);
-                return bytes.length <= ExecutionHistory.MAX_IMAGE && digest(bytes).equals(hash);
+                byte[] bytes = input.readNBytes(MAX_IMAGE + 1);
+                return bytes.length <= MAX_IMAGE && digest(bytes).equals(hash);
             }
         }
 
         boolean remove() throws IOException {
-            ExecutionHistory.checkDirectory(file.getParent());
+            checkDirectory(file.getParent());
             if (!matches()) return false;
             Files.delete(file);
             Files.delete(marker);
@@ -68,7 +82,7 @@ final class ArtifactBudget {
     }
 
     private List<Receipt> receipts(Path dir, Predicate<String> removable) throws IOException {
-        ExecutionHistory.checkDirectory(dir);
+        checkDirectory(dir);
         var result = new ArrayList<Receipt>();
         try (var markers = Files.newDirectoryStream(dir, "*.receipt")) {
             for (Path marker : markers) {
@@ -84,7 +98,7 @@ final class ArtifactBudget {
         return result;
     }
 
-    void prune(Path current, Predicate<String> completed, Path protectedFile, long incoming) throws IOException {
+    public void prune(Path current, Predicate<String> completed, Path protectedFile, long incoming) throws IOException {
         var all = new ArrayList<Receipt>();
         try (var dirs = Files.newDirectoryStream(base, "session-v5-*")) {
             for (var dir : dirs) {
@@ -117,18 +131,18 @@ final class ArtifactBudget {
         if (used > maxBytes) throw new IOException("Artifact budget exhausted.");
     }
 
-    void removeExecution(Path directory, String id) throws IOException {
+    public void removeExecution(Path directory, String id) throws IOException {
         for (var entry : receipts(directory, id::equals)) if (entry.removable) entry.remove();
     }
 
-    boolean owned(Path target) throws IOException {
+    public boolean owned(Path target) throws IOException {
         for (var entry : receipts(target.getParent(), id -> false)) {
             if (entry.file.equals(target) && entry.matches()) return true;
         }
         return false;
     }
 
-    void install(Path target, byte[] bytes, Path stage) throws IOException {
+    public void install(Path target, byte[] bytes, Path stage) throws IOException {
         Path marker = target.resolveSibling(target.getFileName() + "." + digest(bytes) + ".receipt");
         Receipt previous = null;
         if (Files.exists(target, NOFOLLOW_LINKS)) {
@@ -143,7 +157,7 @@ final class ArtifactBudget {
             }
             if (previous == null) throw new IOException("Artifact destination already occupied.");
         }
-        Files.createFile(marker, ExecutionHistory.permissions(target.getParent(), "rw-------"));
+        Files.createFile(marker, permissions(target.getParent(), "rw-------"));
         try {
             Files.move(stage, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException failure) {

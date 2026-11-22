@@ -1,6 +1,6 @@
 # Selenium MCP Server
 
-Control one Chrome, Firefox, or Edge session from an MCP client over stdio. The 30 tools share a fresh browser profile and run headlessly by default.
+Control one Chrome, Firefox, or Edge session from an MCP client over stdio. The 32 tools share a fresh browser profile and run headlessly by default.
 
 ## Build and run
 
@@ -25,7 +25,7 @@ npx --yes @modelcontextprotocol/inspector@2.16.0 --cli --config inspector.json -
 npx --yes @modelcontextprotocol/inspector@2.16.0 --cli --config inspector.json --server selenium --method tools/call --tool-name get_page_text
 ```
 
-Expect 30 tools from the first command and a structured `NO_SESSION` error from the second. Each CLI invocation launches a new process. For a sequence of browser operations, start the interactive Inspector and keep the connection open:
+Expect 32 tools from the first command and a structured `NO_SESSION` error from the second. Each CLI invocation launches a new process. For a sequence of browser operations, start the interactive Inspector and keep the connection open:
 
 ```powershell
 npx --yes @modelcontextprotocol/inspector@2.16.0 --web --config inspector.json --server selenium
@@ -156,6 +156,24 @@ Supported ZXing formats are `CODE_128`, `CODE_39`, `EAN_13`, `UPC_A`, `QR_CODE`,
 
 **Exact-match and EAN-13 / UPC-A policy:** `assert_barcode_value` compares `expected` using strict, case-sensitive exact equality (no trimming, substring matching, or leading-zero normalization) and compares `expectedFormat` by exact enum name when supplied. When both `EAN_13` and `UPC_A` are enabled in ZXing, non-zero 13-digit EAN-13 symbols decode as 13-digit `EAN_13`, while 13-digit EAN-13 symbols beginning with `0` (for example `0036000291452`) decode as 12-digit `UPC_A` (`036000291452`). Under the exact-match policy, assert the 12-digit `UPC_A` form for leading-zero EAN-13/UPC-A codes.
 
+## Data-driven test execution
+
+Two tools execute parameterized scenarios across multiple bounded datasets while keeping datasets isolated and redacting sensitive values.
+
+| Tool | Example arguments | Behavior |
+| --- | --- | --- |
+| `execute_data_driven_scenario` | `{"scenarioName":"login-matrix","steps":[...],"datasets":[{"id":"valid-user","variables":{...}}],"stopOnFailure":false,"timeoutSeconds":60}` | Prevalidates all datasets and resolved steps (including origin checks) before browser access, executes datasets sequentially with browser-state reset isolation, captures evidence on failure, and returns aggregate and per-dataset `PASS` / `FAIL` / `ERROR` results. |
+| `get_data_driven_results` | `{"executionId":"<UUID>"}` | Returns scenario name, dataset IDs, per-dataset statuses and failure categories, step counts, execution timings, redacted diagnostics, verified evidence references, and available JSON/HTML report paths. |
+
+### Placeholder rules and bounds
+
+- **Explicit placeholders:** Use `{{variableName}}` where `variableName` matches `^[A-Za-z_][A-Za-z0-9_.-]{0,63}$`. Substitution is single-pass (values containing `{{...}}` are treated literally and never re-expanded) and resolves strictly from the current dataset's `variables` map.
+- **Allowed substitution fields only:** Placeholders are permitted only in `navigate.url`, `type_text.text`, and `assert_*.expected` (`assert_element_text`, `assert_element_attribute`, `assert_page_title`, `assert_current_url`, `assert_barcode_value`). Placeholders in tool names, `selector`, `strategy`, `condition`, `attribute`, `match`, `expectedFormat`, or non-string fields are rejected with `UNSUPPORTED_PLACEHOLDER`.
+- **Prevalidation:** Missing variables (`MISSING_VARIABLE`), malformed placeholder delimiters (`MALFORMED_PLACEHOLDER`), duplicate dataset IDs (`DUPLICATE_DATASET_ID`), empty datasets or empty variable maps (`INVALID_DATASET`), invalid step arguments, and disallowed resolved origins (`ORIGIN_DENIED`) fail before any browser action executes.
+- **Execution bounds:** `scenarioName` and dataset `id` must match `^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`; 1–20 datasets; 1–32 steps per dataset; maximum 200 total steps (`datasets × steps`); 1–20 string variables per dataset (up to 2,048 characters each); overall deadline 1–120 seconds (default 60).
+- **Browser-state isolation:** Between datasets, the server closes extra windows, returns to `defaultContent()`, deletes cookies (including `HttpOnly`) and clears `localStorage` and `sessionStorage` on every visited allowed origin (verifying both are empty), then resets to `about:blank` (when step 1 is `navigate`) or reloads the initial allowed URL. If browser-state reset cannot be guaranteed, remaining execution aborts with `DATASET_RESET_FAILED` (`RESET_FAILURE`).
+- **Redaction and reporting:** Dataset variable values are never returned in tool responses, error messages, history records, JSON/HTML exports, logs, or artifact filenames (`<uuid>-d<dataset>-<step>.png`). Dataset IDs are preserved as public labels; do not place secrets inside `dataset.id`, and note that captured screenshots still show whatever is visibly rendered in the viewport. Completed runs integrate directly with `list_test_executions`, `get_test_execution`, `get_execution_evidence`, and `export_test_report` (`json` and standalone `html`).
+
 ## Evidence, execution history and reports
 
 Every completed execution receives a UUID in `executionId`. The public case identifier remains in `id`, so running the same case twice creates two distinct records. The latest-result tool continues to return the most recent completed report.
@@ -218,13 +236,24 @@ The HTML opens locally with embedded styles, a status summary, timings, redacted
 
 ## Architecture and operating limits
 
-`Main` connects the official Java SDK's synchronous server to stdio and handles disconnects. `BrowserTools` defines schemas, validates calls, maps errors, and runs explicit waits. `BrowserSession` serializes driver commands and teardown. Server shutdown calls `quit()` on the owned driver. A forced process kill can bypass JVM cleanup.
+The codebase is organized by responsibility under `dev.seleniummcp`:
+
+- `dev.seleniummcp` (`Main`): connects the official Java SDK's synchronous server to stdio and handles shutdown/disconnects.
+- `dev.seleniummcp.protocol` (`ProtocolInput`): enforces the pre-decoding 4 MiB JSON-RPC message boundary.
+- `dev.seleniummcp.tools` (`BrowserTools`, `AdvancedTools`, `AssertionsTool`, `BarcodeTools`): defines the 32 MCP tool schemas, validates calls, maps errors, and runs bounded explicit waits.
+- `dev.seleniummcp.engine` (`ScenarioEngine`, `DataDrivenEngine`): prevalidates and executes sequential and parameterized data-driven scenarios under shared session locking and scenario deadlines.
+- `dev.seleniummcp.browser` (`BrowserSession`, `BrowserEvidence`): owns WebDriver lifecycle, serializes commands with teardown, and captures viewport-verified screenshots and redacted console diagnostics.
+- `dev.seleniummcp.reporting` (`ExecutionHistory`, `HtmlReport`): retains bounded process-local execution history and exports redacted JSON and standalone HTML reports.
+- `dev.seleniummcp.security` (`Origins`): enforces allowed-origin checks across top-level navigation and active frame documents.
+- `dev.seleniummcp.support` (`ArtifactBudget`, `ToolFailure`): manages private local artifact quotas, SHA-256 ownership receipts, and structured error mapping.
+
+Server shutdown calls `quit()` on the owned driver. A forced process kill can bypass JVM cleanup.
 
 `Origins` checks the scheme, host, and effective port against the comma-separated `SELENIUM_ALLOWED_ORIGINS` setting. An empty setting denies navigation. To use a local fixture, explicitly include its origin, such as `http://127.0.0.1:8080`. The server checks the top-level URL before page tools and after navigation or clicks. Page operations also check the active document URL inside frames. Redirects, subresources, pop-ups, and page scripts can initiate network requests independently. Use trusted sites and apply network isolation when browser egress needs enforcement. Page content and screenshots are visible to the connected client.
 
 ## Tests
 
-`mvn test` runs validation and session-state tests. To exercise all 30 tools using a real headless browser and a temporary loopback HTTP fixture, run one of:
+`mvn test` runs validation and session-state tests. To exercise all 32 tools using a real headless browser and a temporary loopback HTTP fixture, run one of:
 
 ```powershell
 mvn "-Dbrowser.test=chrome" test
@@ -232,7 +261,7 @@ mvn "-Dbrowser.test=firefox" test
 mvn "-Dbrowser.test=edge" test
 ```
 
-The fixtures exercise text entry, click effects, discovery, explicit waits, selects, hover, scroll, frame and window transitions, blocked origins, PNG bytes, barcode decoding and assertions across `<img>`/`<svg>`/`<canvas>`, upload rejection, and cleanup. Test reports appear under `target/surefire-reports`.
+The fixtures exercise text entry, click effects, discovery, explicit waits, selects, hover, scroll, frame and window transitions, blocked origins, PNG bytes, barcode decoding and assertions across `<img>`/`<svg>`/`<canvas>`, parameterized data-driven scenarios with cookie/storage isolation and redaction, upload rejection, and cleanup. Test reports appear under `target/surefire-reports`.
 
 ## Release build and local client
 
@@ -253,7 +282,7 @@ java -jar target/selenium-mcp-0.1.0.jar
 Get-FileHash target/selenium-mcp-0.1.0.jar -Algorithm SHA256
 ```
 
-For a desktop MCP client, copy the `mcpServers.selenium` entry from `inspector.json`. Set its second `args` item to the absolute installed JAR path (for example `/opt/selenium-mcp/selenium-mcp-0.1.0.jar` or `C:/Tools/selenium-mcp/selenium-mcp-0.1.0.jar`). Set the exact trusted HTTP(S) origins in the entry's `env` object. Restart the client and list tools. A successful connection advertises 30 tools.
+For a desktop MCP client, copy the `mcpServers.selenium` entry from `inspector.json`. Set its second `args` item to the absolute installed JAR path (for example `/opt/selenium-mcp/selenium-mcp-0.1.0.jar` or `C:/Tools/selenium-mcp/selenium-mcp-0.1.0.jar`). Set the exact trusted HTTP(S) origins in the entry's `env` object. Restart the client and list tools. A successful connection advertises 32 tools.
 
 ### Operational boundaries
 
@@ -273,7 +302,7 @@ mvn -B -ntp org.apache.maven.plugins:maven-dependency-plugin:3.7.0:tree "-Doutpu
 ./scripts/audit-dependencies.ps1
 ```
 
-Run the packaged protocol smoke test with Node.js using `node scripts/smoke-stdio.mjs`. It initializes an actual Java process, checks all 30 tool names and a structured error, and verifies shutdown on stdin EOF.
+Run the packaged protocol smoke test with Node.js using `node scripts/smoke-stdio.mjs`. It initializes an actual Java process, checks all 32 tool names and a structured error, and verifies shutdown on stdin EOF.
 
 The check queries OSV with public Maven package coordinates, including transitives and test libraries. It fails on advisory matches or an incomplete response. Browser binaries, build plugins and npm tools need their own update policy.
 

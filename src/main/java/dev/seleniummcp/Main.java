@@ -1,5 +1,10 @@
 package dev.seleniummcp;
 
+import dev.seleniummcp.browser.BrowserSession;
+import dev.seleniummcp.protocol.ProtocolInput;
+import dev.seleniummcp.reporting.ExecutionHistory;
+import dev.seleniummcp.security.Origins;
+import dev.seleniummcp.tools.BrowserTools;
 import io.modelcontextprotocol.json.McpJsonDefaults;
 import io.modelcontextprotocol.server.McpServer;
 import io.modelcontextprotocol.server.transport.StdioServerTransportProvider;

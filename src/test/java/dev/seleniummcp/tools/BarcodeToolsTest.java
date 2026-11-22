@@ -1,9 +1,13 @@
-package dev.seleniummcp;
+package dev.seleniummcp.tools;
 
 import com.google.zxing.BarcodeFormat;
 import com.google.zxing.MultiFormatWriter;
 import com.google.zxing.common.BitMatrix;
 import com.sun.net.httpserver.HttpServer;
+import dev.seleniummcp.browser.BrowserSession;
+import dev.seleniummcp.reporting.ExecutionHistory;
+import dev.seleniummcp.security.Origins;
+import dev.seleniummcp.support.ToolFailure;
 import io.modelcontextprotocol.spec.McpSchema.*;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
@@ -115,9 +119,9 @@ class BarcodeToolsTest {
         return "drawMatrix('" + id + "'," + rows + "," + scale + ");";
     }
 
-    @Test void registersAllThirtyToolsWithPreservedAndBarcodeSchemas() {
+    @Test void registersAllToolsWithPreservedAndBarcodeSchemas() {
         var specs = tools.specifications();
-        assertEquals(30, specs.size());
+        assertEquals(32, specs.size());
         var byName = new HashMap<String, Tool>();
         for (var spec : specs) byName.put(spec.tool().name(), spec.tool());
 

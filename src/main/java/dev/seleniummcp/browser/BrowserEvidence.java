@@ -1,5 +1,8 @@
-package dev.seleniummcp;
+package dev.seleniummcp.browser;
 
+import dev.seleniummcp.reporting.ExecutionHistory;
+import dev.seleniummcp.security.Origins;
+import dev.seleniummcp.support.ToolFailure;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.*;
@@ -7,7 +10,9 @@ import java.util.logging.Level;
 import org.openqa.selenium.*;
 import org.openqa.selenium.logging.LogType;
 
-final class BrowserEvidence {
+public final class BrowserEvidence {
+    private BrowserEvidence() {}
+
     // WebDriver captures the top-level viewport, including any displayed child documents.
     private static final String DOCUMENTS = """
             const queue = [window.top], urls = [];
@@ -22,8 +27,8 @@ final class BrowserEvidence {
             } catch (_) { return null; }
             """;
 
-    static void capture(BrowserSession sessions, Origins origins, ExecutionHistory history, UUID execution,
-                        Map<String, Object> step) {
+    public static void capture(BrowserSession sessions, Origins origins, ExecutionHistory history, UUID execution,
+                               Map<String, Object> step) {
         try {
             byte[] png = sessions.use(driver -> screenshot(driver, origins));
             step.put("evidence", history.screenshot(execution, (Integer) step.get("step"), png));
@@ -37,7 +42,22 @@ final class BrowserEvidence {
         }
     }
 
-    static byte[] screenshot(WebDriver driver, Origins origins) {
+    public static void capture(BrowserSession sessions, Origins origins, ExecutionHistory history, UUID execution,
+                               int datasetIndex, String datasetId, Map<String, Object> step) {
+        try {
+            byte[] png = sessions.use(driver -> screenshot(driver, origins));
+            step.put("evidence", history.screenshot(execution, datasetIndex, datasetId, (Integer) step.get("step"), png));
+        } catch (ToolFailure e) {
+            step.put("screenshotStatus", switch (e.code) {
+                case "ORIGIN_DENIED", "INVALID_URL", "UNVERIFIED_VIEWPORT" -> "CONTEXT_BLOCKED";
+                default -> "UNAVAILABLE";
+            });
+        } catch (IOException | RuntimeException e) {
+            step.put("screenshotStatus", "UNAVAILABLE");
+        }
+    }
+
+    public static byte[] screenshot(WebDriver driver, Origins origins) {
         checkViewport(driver, origins);
         byte[] bytes = ((TakesScreenshot) driver).getScreenshotAs(OutputType.BYTES);
         checkViewport(driver, origins);
@@ -45,7 +65,7 @@ final class BrowserEvidence {
         return bytes;
     }
 
-    static byte[] elementScreenshot(WebDriver driver, WebElement element, Origins origins) {
+    public static byte[] elementScreenshot(WebDriver driver, WebElement element, Origins origins) {
         checkViewport(driver, origins);
         byte[] bytes = element.getScreenshotAs(OutputType.BYTES);
         checkViewport(driver, origins);
@@ -64,7 +84,7 @@ final class BrowserEvidence {
         for (Object url : urls) origins.check((String) url);
     }
 
-    static Map<String, Object> consoleEntries(org.openqa.selenium.logging.Logs logs, Instant start) {
+    public static Map<String, Object> consoleEntries(org.openqa.selenium.logging.Logs logs, Instant start) {
         if (!logs.getAvailableLogTypes().contains(LogType.BROWSER)) return Map.of("status", "UNSUPPORTED");
         var entries = new ArrayList<Map<String, Object>>();
         for (var log : logs.get(LogType.BROWSER)) {
@@ -78,7 +98,7 @@ final class BrowserEvidence {
         return Map.of("status", "COLLECTED", "entries", entries);
     }
 
-    static Map<String, Object> console(BrowserSession sessions, Origins origins, Instant start) {
+    public static Map<String, Object> console(BrowserSession sessions, Origins origins, Instant start) {
         try {
             return sessions.use(driver -> {
                 origins.checkContext(driver);

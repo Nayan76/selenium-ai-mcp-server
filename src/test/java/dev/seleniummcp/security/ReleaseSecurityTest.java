@@ -1,5 +1,8 @@
-package dev.seleniummcp;
+package dev.seleniummcp.security;
 
+import dev.seleniummcp.protocol.ProtocolInput;
+import dev.seleniummcp.reporting.ExecutionHistory;
+import dev.seleniummcp.support.ToolFailure;
 import java.io.*;
 import java.nio.file.*;
 import java.nio.file.attribute.FileTime;

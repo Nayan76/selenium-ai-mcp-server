@@ -1,8 +1,13 @@
-package dev.seleniummcp;
+package dev.seleniummcp.tools;
 
 import com.google.zxing.*;
 import com.google.zxing.common.GlobalHistogramBinarizer;
 import com.google.zxing.common.HybridBinarizer;
+import dev.seleniummcp.browser.BrowserEvidence;
+import dev.seleniummcp.engine.ScenarioEngine;
+import dev.seleniummcp.reporting.ExecutionHistory;
+import dev.seleniummcp.security.Origins;
+import dev.seleniummcp.support.ToolFailure;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;

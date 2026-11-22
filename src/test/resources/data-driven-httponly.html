@@ -1,0 +1,7 @@
+<!doctype html><html><head><title>Session Set</title></head>
+<body><p id="done">Cookie set</p>
+<script>
+  document.cookie = 'js_cookie=dirty; path=/';
+  localStorage.setItem('activeUser', 'leaked-user');
+  sessionStorage.setItem('sessionToken', 'leaked-token');
+</script></body></html>

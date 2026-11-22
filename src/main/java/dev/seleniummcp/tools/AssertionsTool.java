@@ -1,4 +1,4 @@
-package dev.seleniummcp;
+package dev.seleniummcp.tools;
 
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import java.util.LinkedHashMap;

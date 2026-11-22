@@ -1,0 +1,35 @@
+<!doctype html>
+<html><head><title>Data-Driven Fixture</title></head>
+<body>
+  <h1 id="heading">Login Portal</h1>
+  <div id="prior-httponly">HTTP_ONLY_SEEN</div>
+  <div id="prior-cookie"></div>
+  <div id="prior-local"></div>
+  <div id="prior-session"></div>
+  <input id="username" type="text">
+  <input id="password" type="password">
+  <button id="submit" type="button">Sign in</button>
+  <div id="status">idle</div>
+  <a id="leave" href="DISALLOWED_ORIGIN/login">Leave origin</a>
+  <button id="popup" type="button" onclick="window.open('ALLOWED_ORIGIN/login', '_blank')">Popup</button>
+  <script>
+    const priorCookie = document.cookie || 'none';
+    const priorLocal = localStorage.getItem('activeUser') || 'none';
+    const priorSession = sessionStorage.getItem('sessionToken') || 'none';
+    document.getElementById('prior-cookie').textContent = priorCookie;
+    document.getElementById('prior-local').textContent = priorLocal;
+    document.getElementById('prior-session').textContent = priorSession;
+    document.getElementById('submit').addEventListener('click', () => {
+      const u = document.getElementById('username').value;
+      const p = document.getElementById('password').value;
+      document.cookie = 'session_user=' + encodeURIComponent(u) + '; path=/';
+      localStorage.setItem('activeUser', u);
+      sessionStorage.setItem('sessionToken', 'tok-' + u);
+      if (p === 'valid-pass' || p === 'SUPER-SECRET-PASSWORD-991') {
+        document.getElementById('status').textContent = 'Welcome ' + u;
+      } else {
+        document.getElementById('status').textContent = 'Access denied for ' + u;
+      }
+    });
+  </script>
+</body></html>

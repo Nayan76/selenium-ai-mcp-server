@@ -1,5 +1,8 @@
-package dev.seleniummcp;
+package dev.seleniummcp.tools;
 
+import dev.seleniummcp.engine.ScenarioEngine;
+import dev.seleniummcp.security.Origins;
+import dev.seleniummcp.support.ToolFailure;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import java.time.Duration;
 import java.util.ArrayList;

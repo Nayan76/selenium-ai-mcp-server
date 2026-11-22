@@ -1,16 +1,16 @@
-package dev.seleniummcp;
+package dev.seleniummcp.support;
 
 import org.openqa.selenium.*;
 
-final class ToolFailure extends RuntimeException {
-    final String code;
+public final class ToolFailure extends RuntimeException {
+    public final String code;
 
-    ToolFailure(String code, String message) {
+    public ToolFailure(String code, String message) {
         super(message);
         this.code = code;
     }
 
-    static ToolFailure browser(RuntimeException failure) {
+    public static ToolFailure browser(RuntimeException failure) {
         return switch (failure) {
             case ElementClickInterceptedException ignored -> new ToolFailure("ELEMENT_CLICK_INTERCEPTED", "Another element intercepted the click.");
             case ElementNotInteractableException ignored -> new ToolFailure("ELEMENT_NOT_INTERACTABLE", "The element cannot receive this interaction.");

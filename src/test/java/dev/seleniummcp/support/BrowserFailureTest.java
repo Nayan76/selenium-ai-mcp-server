@@ -1,4 +1,4 @@
-package dev.seleniummcp;
+package dev.seleniummcp.support;
 
 import java.util.stream.Stream;
 import org.junit.jupiter.params.ParameterizedTest;

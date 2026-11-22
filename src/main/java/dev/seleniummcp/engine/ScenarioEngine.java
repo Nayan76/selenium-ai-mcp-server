@@ -1,19 +1,26 @@
-package dev.seleniummcp;
+package dev.seleniummcp.engine;
 
+import dev.seleniummcp.browser.BrowserEvidence;
+import dev.seleniummcp.browser.BrowserSession;
+import dev.seleniummcp.reporting.ExecutionHistory;
+import dev.seleniummcp.security.Origins;
+import dev.seleniummcp.support.ToolFailure;
 import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
+import io.modelcontextprotocol.spec.McpSchema.JsonSchema;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
+import java.util.function.BiConsumer;
 import org.openqa.selenium.*;
 
-final class ScenarioEngine {
+public final class ScenarioEngine {
     private static final int MAX_STEPS = 32;
     private static final int MAX_SECONDS = 60;
     private static final Set<String> ACTIONS = Set.of("navigate", "click_element", "type_text", "wait_for_element");
     private static final ThreadLocal<Long> DEADLINE = new ThreadLocal<>();
-    private static final Map<String, Object> STEP_SCHEMA = Map.of("type", "object", "additionalProperties", false,
+    static final Map<String, Object> STEP_SCHEMA = Map.of("type", "object", "additionalProperties", false,
             "required", List.of("tool", "arguments"), "properties", Map.of("tool", Map.of("type", "string"),
                     "arguments", Map.of("type", "object")));
     private static final Map<String, Object> PROPERTIES = Map.of(
@@ -24,7 +31,7 @@ final class ScenarioEngine {
             "screenshotOnSuccess", Map.of("type", "boolean", "default", false),
             "collectConsole", Map.of("type", "boolean", "default", false),
             "timeoutSeconds", Map.of("type", "integer", "minimum", 1, "maximum", MAX_SECONDS, "default", 30));
-    static final Map<String, Object> SCHEMA = Map.of("type", "object", "additionalProperties", false,
+    public static final Map<String, Object> SCHEMA = Map.of("type", "object", "additionalProperties", false,
             "required", List.of("id", "description", "steps"), "properties", PROPERTIES);
 
     private final BrowserSession sessions;
@@ -32,18 +39,34 @@ final class ScenarioEngine {
     private volatile CallToolResult last;
 
     private final ExecutionHistory history;
+    private final BiConsumer<JsonSchema, Map<String, Object>> validator;
 
-    ScenarioEngine(BrowserSession sessions, Origins origins, ExecutionHistory history) {
+    public ScenarioEngine(BrowserSession sessions, Origins origins, ExecutionHistory history,
+                          BiConsumer<JsonSchema, Map<String, Object>> validator) {
         this.history = history;
         this.sessions = sessions;
         this.origins = origins;
+        this.validator = validator;
     }
 
-    static boolean supports(String name) {
+    public static boolean supports(String name) {
         return ACTIONS.contains(name) || name.startsWith("assert_");
     }
 
-    static Duration limitWait(Duration requested) {
+    static void setDeadline(long deadlineNanos) {
+        DEADLINE.set(deadlineNanos);
+    }
+
+    static void clearDeadline() {
+        DEADLINE.remove();
+    }
+
+    static boolean deadlineExpired() {
+        Long deadline = DEADLINE.get();
+        return deadline != null && System.nanoTime() >= deadline;
+    }
+
+    public static Duration limitWait(Duration requested) {
         Long deadline = DEADLINE.get();
         if (deadline == null) return requested;
         long remaining = deadline - System.nanoTime();
@@ -90,7 +113,7 @@ final class ScenarioEngine {
                 args.put(key, entry.getValue());
             }
             try {
-                BrowserTools.validate(spec.tool().inputSchema(), args);
+                validator.accept(spec.tool().inputSchema(), args);
                 if (name.equals("navigate")) origins.check((String) args.get("url"));
             } catch (ToolFailure invalid) {
                 throw new ToolFailure(invalid.code, "Step " + index + ": " + invalid.getMessage());
@@ -100,7 +123,7 @@ final class ScenarioEngine {
         return new Scenario(id, validated, ((Number) timeout).intValue(), keepGoing);
     }
 
-    CallToolResult execute(Map<?, ?> raw, Map<String, SyncToolSpecification> tools) {
+    public CallToolResult execute(Map<?, ?> raw, Map<String, SyncToolSpecification> tools) {
         Scenario scenario = validate(raw, tools);
         // A scenario owns the same lock as direct driver operations for its whole run.
         synchronized (sessions) {
@@ -179,8 +202,13 @@ final class ScenarioEngine {
     }
 
     private CallToolResult run(WebDriver driver, Step step) {
+        return runStep(driver, origins, step.name(), step.tool(), step.args());
+    }
+
+    static CallToolResult runStep(WebDriver driver, Origins origins, String name,
+                                  SyncToolSpecification tool, Map<String, Object> args) {
         // A freshly launched browser can navigate away from its empty startup document.
-        boolean startup = step.name().equals("navigate") && Set.of("about:blank", "data:,", "about:newtab")
+        boolean startup = name.equals("navigate") && Set.of("about:blank", "data:,", "about:newtab")
                 .contains(driver.getCurrentUrl()) && Boolean.TRUE.equals(((JavascriptExecutor) driver)
                 .executeScript("return window === window.top"));
         if (!startup) origins.checkContext(driver);
@@ -190,15 +218,21 @@ final class ScenarioEngine {
         boolean changed = capped.compareTo(original) < 0;
         if (changed) timeouts.pageLoadTimeout(Duration.ofMillis(Math.max(1, capped.toMillis())));
         try {
-            var result = step.tool().callHandler().apply(null, new CallToolRequest(step.name(), step.args()));
+            var result = tool.callHandler().apply(null, new CallToolRequest(name, args));
             if (!Boolean.TRUE.equals(result.isError())) origins.checkContext(driver);
             return result;
         } finally {
-            if (changed) timeouts.pageLoadTimeout(original);
+            if (changed) {
+                try {
+                    timeouts.pageLoadTimeout(original);
+                } catch (RuntimeException ignored) {
+                    // Driver may have closed during the step; preserve the original step outcome.
+                }
+            }
         }
     }
 
-    private static Map<String, Object> diagnostics(CallToolResult result) {
+    static Map<String, Object> diagnostics(CallToolResult result) {
         var fields = (Map<?, ?>) result.structuredContent();
         var safe = new HashMap<String, Object>();
         for (String key : List.of("code", "message", "status", "expected", "actual", "expectedFormat", "actualFormat")) {
@@ -207,15 +241,15 @@ final class ScenarioEngine {
         return safe;
     }
 
-    private static Map<String, Object> error(String code, String message) {
+    static Map<String, Object> error(String code, String message) {
         return Map.of("status", "ERROR", "code", code, "message", message);
     }
 
-    private static long elapsed(long start) {
+    static long elapsed(long start) {
         return Duration.ofNanos(System.nanoTime() - start).toMillis();
     }
 
-    CallToolResult latest() {
+    public CallToolResult latest() {
         synchronized (sessions) {
             var result = last;
             if (result == null) throw new ToolFailure("NO_RESULTS", "No scenario has completed in this server process.");

@@ -1,9 +1,10 @@
-package dev.seleniummcp;
+package dev.seleniummcp.tools;
 
 import com.sun.net.httpserver.HttpServer;
+import dev.seleniummcp.browser.BrowserSession;
+import dev.seleniummcp.security.Origins;
 import io.modelcontextprotocol.spec.McpSchema.*;
 import java.net.InetSocketAddress;
-import java.nio.charset.StandardCharsets;
 import java.util.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
@@ -62,11 +63,10 @@ class BrowserToolsTest {
     @EnabledIfSystemProperty(named = "browser.test", matches = "chrome|firefox|edge")
     void browserRoundTrip() throws Exception {
         var http = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        byte[] page = """
-                <html><body><input id="name"><input type="file" id="upload">
-                <button onclick="document.querySelector('output').textContent=document.querySelector('#name').value">Apply</button>
-                <output></output></body></html>
-                """.getBytes(StandardCharsets.UTF_8);
+        byte[] page;
+        try (var resource = BrowserToolsTest.class.getResourceAsStream("/browser-roundtrip.html")) {
+            page = Objects.requireNonNull(resource).readAllBytes();
+        }
         http.createContext("/", exchange -> {
             try (exchange) {
                 exchange.getResponseHeaders().set("Content-Type", "text/html");

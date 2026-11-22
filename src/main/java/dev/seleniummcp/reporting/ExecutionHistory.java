@@ -1,17 +1,18 @@
-package dev.seleniummcp;
+package dev.seleniummcp.reporting;
 
+import dev.seleniummcp.support.ArtifactBudget;
+import dev.seleniummcp.support.ToolFailure;
 import io.modelcontextprotocol.json.McpJsonDefaults;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
-import java.nio.file.attribute.*;
 import java.time.Instant;
 import java.util.*;
 import org.slf4j.LoggerFactory;
 
 /** Only server-generated UUIDs, numbered PNGs and fixed report formats reach the filesystem. */
-final class ExecutionHistory {
-    static final int MAX_IMAGE = 4 * 1024 * 1024;
+public final class ExecutionHistory {
+    public static final int MAX_IMAGE = ArtifactBudget.MAX_IMAGE;
     private static final int MAX_REPORT = 512 * 1024;
     private final Path base;
     private final int retention;
@@ -20,7 +21,7 @@ final class ExecutionHistory {
     private final Set<String> activeEvidence = new HashSet<>();
     private final LinkedHashMap<String, Map<String, Object>> records = new LinkedHashMap<>();
 
-    static ExecutionHistory configured() {
+    public static ExecutionHistory configured() {
         int count;
         try {
             count = Integer.parseInt(System.getenv().getOrDefault("SELENIUM_HISTORY_LIMIT", "50"));
@@ -43,18 +44,18 @@ final class ExecutionHistory {
         throw new IllegalArgumentException(key + " must be between 1 and " + maximum + ".");
     }
 
-    ExecutionHistory(Path base, int retention) {
+    public ExecutionHistory(Path base, int retention) {
         this(base, retention, 256L * 1024 * 1024, java.time.Duration.ofDays(7));
     }
 
-    ExecutionHistory(Path base, int retention, long maxBytes, java.time.Duration age) {
+    public ExecutionHistory(Path base, int retention, long maxBytes, java.time.Duration age) {
         if (retention < 1 || retention > 200) throw new IllegalArgumentException("History limit must be 1–200.");
         this.base = base.toAbsolutePath().normalize();
         this.retention = retention;
         this.budget = new ArtifactBudget(this.base, maxBytes, age);
     }
 
-    synchronized void complete(Map<String, Object> record) {
+    public synchronized void complete(Map<String, Object> record) {
         String id = (String) record.get("executionId");
         activeEvidence.remove(id);
         records.put(id, record);
@@ -76,7 +77,7 @@ final class ExecutionHistory {
         }
     }
 
-    synchronized void maintain() {
+    public synchronized void maintain() {
         if (!Files.isDirectory(base, LinkOption.NOFOLLOW_LINKS)) return;
         try {
             budget.locked(() -> {
@@ -88,12 +89,12 @@ final class ExecutionHistory {
         }
     }
 
-    synchronized void cleanup() {
+    public synchronized void cleanup() {
         records.keySet().forEach(this::removeArtifacts);
         records.clear();
         if (directory != null) {
             try {
-                checkDirectory(directory);
+                ArtifactBudget.checkDirectory(directory);
                 Files.delete(directory);
                 directory = null;
             } catch (IOException | SecurityException e) {
@@ -102,23 +103,19 @@ final class ExecutionHistory {
         }
     }
 
-    synchronized Map<String, Object> get(String id) {
+    public synchronized Map<String, Object> get(String id) {
         var record = records.get(id);
         if (record == null) throw new ToolFailure("EXECUTION_NOT_FOUND", "Execution is unknown or has expired.");
         if (!(record.get("evidence") instanceof List<?> evidence) || evidence.isEmpty()) return record;
+        if ("data_driven".equals(record.get("type"))) {
+            return verifyDataDrivenEvidence(id, record, evidence);
+        }
         var available = new ArrayList<Object>();
         var rows = new ArrayList<Object>();
         for (Object item : (List<?>) record.get("steps")) {
             var row = (Map<?, ?>) item;
             if (row.get("evidence") instanceof Map<?, ?> ref) {
-                boolean present = false;
-                try {
-                    checkDirectory(directory);
-                    present = budget.owned(directory.resolve(id + "-" + row.get("step") + ".png"));
-                } catch (IOException | SecurityException unavailable) {
-                    // Fail closed when a previously captured artifact cannot be verified.
-                }
-                if (!present) {
+                if (!ownedEvidence(id + "-" + row.get("step") + ".png")) {
                     var copy = new HashMap<Object, Object>(row);
                     copy.remove("evidence");
                     copy.put("screenshotStatus", "EXPIRED_OR_UNAVAILABLE");
@@ -136,13 +133,78 @@ final class ExecutionHistory {
         return snapshot;
     }
 
-    synchronized List<Map<String, Object>> list() {
+    private Map<String, Object> verifyDataDrivenEvidence(String id, Map<String, Object> record, List<?> evidence) {
+        var available = new ArrayList<Object>();
+        var datasets = new ArrayList<Object>();
+        for (Object dsItem : (List<?>) record.get("datasets")) {
+            var ds = (Map<?, ?>) dsItem;
+            Object datasetIndex = ds.get("datasetIndex");
+            var rows = new ArrayList<Object>();
+            boolean changed = false;
+            for (Object item : (List<?>) ds.get("steps")) {
+                var row = (Map<?, ?>) item;
+                if (row.get("evidence") instanceof Map<?, ?> ref) {
+                    if (!ownedEvidence(id + "-d" + datasetIndex + "-" + row.get("step") + ".png")) {
+                        var copy = new LinkedHashMap<Object, Object>(row);
+                        copy.remove("evidence");
+                        copy.put("screenshotStatus", "EXPIRED_OR_UNAVAILABLE");
+                        rows.add(copy);
+                        changed = true;
+                        continue;
+                    }
+                    available.add(ref);
+                }
+                rows.add(row);
+            }
+            if (changed) {
+                var dsCopy = new LinkedHashMap<Object, Object>(ds);
+                dsCopy.put("steps", rows);
+                datasets.add(dsCopy);
+            } else {
+                datasets.add(ds);
+            }
+        }
+        if (available.size() == evidence.size()) return record;
+        var snapshot = new LinkedHashMap<>(record);
+        snapshot.put("datasets", datasets);
+        snapshot.put("evidence", available);
+        return snapshot;
+    }
+
+    private boolean ownedEvidence(String filename) {
+        if (directory == null) return false;
+        try {
+            ArtifactBudget.checkDirectory(directory);
+            return budget.owned(directory.resolve(filename));
+        } catch (IOException | SecurityException unavailable) {
+            // Fail closed when a previously captured artifact cannot be verified.
+            return false;
+        }
+    }
+
+    public synchronized Map<String, Object> availableReports(String id) {
+        var exported = new LinkedHashMap<String, Object>();
+        if (directory != null) {
+            for (String format : List.of("json", "html")) {
+                String filename = id + "." + format;
+                if (ownedEvidence(filename)) {
+                    exported.put(format, directory.getFileName() + "/" + filename);
+                }
+            }
+        }
+        var result = new LinkedHashMap<String, Object>();
+        result.put("exported", exported);
+        result.put("exportableFormats", List.of("json", "html"));
+        return result;
+    }
+
+    public synchronized List<Map<String, Object>> list() {
         return records.reversed().values().stream().map(r -> Map.of(
                 "executionId", r.get("executionId"), "id", r.get("id"), "status", r.get("status"),
                 "endedAt", r.get("endedAt"), "durationMs", r.get("durationMs"))).toList();
     }
 
-    synchronized Map<String, Object> screenshot(UUID id, int step, byte[] png) throws IOException {
+    public synchronized Map<String, Object> screenshot(UUID id, int step, byte[] png) throws IOException {
         if (step < 1 || step > 32 || png.length > MAX_IMAGE || png.length < 8
                 || !Arrays.equals(png, 0, 8, new byte[]{-119,80,78,71,13,10,26,10}, 0, 8)) {
             throw new IOException("Invalid or oversized screenshot.");
@@ -153,7 +215,27 @@ final class ExecutionHistory {
                 "type", "image/png", "path", path);
     }
 
-    synchronized Map<String, Object> export(String id, String format) {
+    public synchronized Map<String, Object> screenshot(UUID id, int datasetIndex, String datasetId, int step, byte[] png)
+            throws IOException {
+        if (datasetIndex < 1 || datasetIndex > ArtifactBudget.MAX_DATASETS || step < 1 || step > 32
+                || png.length > MAX_IMAGE || png.length < 8
+                || !Arrays.equals(png, 0, 8, new byte[]{-119,80,78,71,13,10,26,10}, 0, 8)) {
+            throw new IOException("Invalid or oversized screenshot.");
+        }
+        String path = save(id + "-d" + datasetIndex + "-" + step + ".png", png);
+        activeEvidence.add(id.toString());
+        var ref = new LinkedHashMap<String, Object>();
+        ref.put("executionId", id.toString());
+        ref.put("datasetIndex", datasetIndex);
+        ref.put("datasetId", datasetId);
+        ref.put("step", step);
+        ref.put("timestamp", Instant.now().toString());
+        ref.put("type", "image/png");
+        ref.put("path", path);
+        return ref;
+    }
+
+    public synchronized Map<String, Object> export(String id, String format) {
         var record = get(id);
         try {
             byte[] bytes = switch (format) {
@@ -175,9 +257,9 @@ final class ExecutionHistory {
 
     private String install(String filename, byte[] bytes) throws IOException {
         if (directory == null) {
-            directory = Files.createTempDirectory(base, ArtifactBudget.sessionPrefix(), permissions(base, "rwx------"));
+            directory = Files.createTempDirectory(base, ArtifactBudget.sessionPrefix(), ArtifactBudget.permissions(base, "rwx------"));
         }
-        checkDirectory(directory);
+        ArtifactBudget.checkDirectory(directory);
         Path target = directory.resolve(filename).normalize();
         if (!directory.equals(target.getParent()) || Files.isSymbolicLink(target)
                 || (Files.exists(target, LinkOption.NOFOLLOW_LINKS) && !Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS))) {
@@ -185,7 +267,7 @@ final class ExecutionHistory {
         }
         String owner = filename.substring(0, 36);
         budget.prune(directory, id -> !owner.equals(id) && !activeEvidence.contains(id), target, bytes.length);
-        Path stage = Files.createTempFile(directory, ".pending-", ".tmp", permissions(directory, "rw-------"));
+        Path stage = Files.createTempFile(directory, ".pending-", ".tmp", ArtifactBudget.permissions(directory, "rw-------"));
         try {
             Files.write(stage, bytes, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS);
             budget.install(target, bytes, stage);
@@ -201,25 +283,13 @@ final class ExecutionHistory {
             Path next = current.resolve(component);
             if (!Files.exists(next, LinkOption.NOFOLLOW_LINKS)) {
                 try {
-                    Files.createDirectory(next, permissions(current, "rwx------"));
+                    Files.createDirectory(next, ArtifactBudget.permissions(current, "rwx------"));
                 } catch (FileAlreadyExistsException race) {
                     // A concurrent process may create the same configured base.
                 }
             }
-            checkDirectory(next);
+            ArtifactBudget.checkDirectory(next);
             current = next;
         }
-    }
-
-    static void checkDirectory(Path path) throws IOException {
-        if (!Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS) || !path.toRealPath().equals(path)) {
-            throw new IOException("Artifact path must be a real directory.");
-        }
-    }
-
-    static FileAttribute<?>[] permissions(Path parent, String mask) throws IOException {
-        return Files.getFileStore(parent).supportsFileAttributeView(PosixFileAttributeView.class)
-                ? new FileAttribute<?>[]{PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString(mask))}
-                : new FileAttribute<?>[0];
     }
 }

@@ -1,5 +1,6 @@
-package dev.seleniummcp;
+package dev.seleniummcp.security;
 
+import dev.seleniummcp.support.ToolFailure;
 import java.net.URI;
 import java.util.HashSet;
 import java.util.Locale;
@@ -7,10 +8,10 @@ import java.util.Set;
 import org.openqa.selenium.JavascriptExecutor;
 import org.openqa.selenium.WebDriver;
 
-final class Origins {
+public final class Origins {
     private final Set<String> allowed = new HashSet<>();
 
-    Origins(String configured) {
+    public Origins(String configured) {
         if (configured.isBlank()) return;
         for (String entry : configured.split(",", -1)) {
             URI uri = parse(entry.strip());
@@ -22,13 +23,19 @@ final class Origins {
         }
     }
 
-    void check(String url) {
-        if (!allowed.contains(origin(parse(url)))) {
-            throw new ToolFailure("ORIGIN_DENIED", "Choose an origin listed in SELENIUM_ALLOWED_ORIGINS.");
-        }
+    public void check(String url) {
+        originOf(url);
     }
 
-    void checkContext(WebDriver driver) {
+    public String originOf(String url) {
+        String resolved = origin(parse(url));
+        if (!allowed.contains(resolved)) {
+            throw new ToolFailure("ORIGIN_DENIED", "Choose an origin listed in SELENIUM_ALLOWED_ORIGINS.");
+        }
+        return resolved;
+    }
+
+    public void checkContext(WebDriver driver) {
         check(driver.getCurrentUrl());
         // WebDriver's current URL describes the top-level window even inside a frame.
         var js = (JavascriptExecutor) driver;

@@ -1,4 +1,4 @@
-package dev.seleniummcp;
+package dev.seleniummcp.reporting;
 
 import java.util.List;
 import java.util.Map;
@@ -21,6 +21,9 @@ final class HtmlReport {
             """;
 
     static String render(Map<String, Object> report) {
+        if ("data_driven".equals(report.get("type"))) {
+            return renderDataDriven(report);
+        }
         var html = new StringBuilder(HEAD);
         var steps = (List<?>) report.get("steps");
         html.append("<header>Execution report<h1>").append(escape(report.get("id"))).append("</h1>")
@@ -34,7 +37,70 @@ final class HtmlReport {
         }
         html.append("<span>Executed ").append(steps.size()).append(" of ").append(escape(report.get("plannedSteps")))
                 .append("</span><span>").append(escape(report.get("durationMs"))).append(" ms</span></div></section>")
-                .append("<section class=table><h2>Steps</h2><table><thead><tr><th>Step<th>Tool<th>Status<th>Duration<th>Diagnostics<th>Evidence</tr></thead><tbody>");
+                .append("<section class=table><h2>Steps</h2>");
+        appendStepTable(html, steps);
+        html.append("</section>");
+        appendConsole(html, report);
+        return html.append("</main></body></html>").toString();
+    }
+
+    private static String renderDataDriven(Map<String, Object> report) {
+        var html = new StringBuilder(HEAD);
+        var datasets = (List<?>) report.get("datasets");
+        var summary = report.get("summary") instanceof Map<?, ?> map ? map : Map.of();
+        html.append("<header>Data-driven execution report<h1>").append(escape(report.get("scenarioName"))).append("</h1>")
+                .append(badge(report.get("status"))).append("<p class=meta>Execution ID <code>")
+                .append(escape(report.get("executionId"))).append("</code><br>Browser ").append(escape(report.get("browser")))
+                .append("<br>Stop on failure ").append(escape(report.get("stopOnFailure")))
+                .append("<br>Started ").append(escape(report.get("startedAt"))).append("<br>Ended ")
+                .append(escape(report.get("endedAt"))).append("</p></header><section><h2>Aggregate Summary</h2><div class=stats>")
+                .append("<span>PASS <b>").append(escape(summary.get("passedDatasets"))).append("</b></span>")
+                .append("<span>FAIL <b>").append(escape(summary.get("failedDatasets"))).append("</b></span>")
+                .append("<span>ERROR <b>").append(escape(summary.get("errorDatasets"))).append("</b></span>")
+                .append("<span>Skipped <b>").append(escape(summary.get("skippedDatasets"))).append("</b></span>")
+                .append("<span>Datasets ").append(escape(report.get("executedDatasets"))).append(" of ")
+                .append(escape(report.get("plannedDatasets"))).append("</span>")
+                .append("<span>Steps ").append(escape(report.get("executedSteps"))).append(" of ")
+                .append(escape(report.get("plannedTotalSteps"))).append("</span>")
+                .append("<span>").append(escape(report.get("durationMs"))).append(" ms</span></div></section>")
+                .append("<section class=table><h2>Datasets</h2><table><thead><tr><th>#<th>Dataset ID<th>Status<th>Category<th>Steps<th>Duration</tr></thead><tbody>");
+        for (Object item : datasets) {
+            var ds = (Map<?, ?>) item;
+            html.append("<tr><td>").append(escape(ds.get("datasetIndex")))
+                    .append("<td><code>").append(escape(ds.get("datasetId"))).append("</code>")
+                    .append("<td>").append(badge(ds.get("status")))
+                    .append("<td>").append(escape(ds.get("failureCategory")))
+                    .append("<td>").append(escape(ds.get("executedSteps"))).append(" / ").append(escape(ds.get("plannedSteps")))
+                    .append(" (P:").append(escape(ds.get("passedSteps")))
+                    .append(" F:").append(escape(ds.get("failedSteps")))
+                    .append(" E:").append(escape(ds.get("errorSteps"))).append(")")
+                    .append("<td>").append(escape(ds.get("durationMs"))).append(" ms</tr>");
+        }
+        html.append("</tbody></table></section>");
+        for (Object item : datasets) {
+            var ds = (Map<?, ?>) item;
+            html.append("<section class=table><h2>Dataset ").append(escape(ds.get("datasetIndex")))
+                    .append(": <code>").append(escape(ds.get("datasetId"))).append("</code> ")
+                    .append(badge(ds.get("status"))).append("</h2><p class=meta>Duration ")
+                    .append(escape(ds.get("durationMs"))).append(" ms");
+            if (ds.get("failureCategory") != null) {
+                html.append(" · Category ").append(escape(ds.get("failureCategory")));
+            }
+            if (ds.get("message") != null) {
+                html.append(" · ").append(escape(ds.get("code"))).append(" ").append(escape(ds.get("message")));
+            }
+            html.append("</p>");
+            if (ds.get("steps") instanceof List<?> dsSteps && !dsSteps.isEmpty()) {
+                appendStepTable(html, dsSteps);
+            }
+            html.append("</section>");
+        }
+        appendConsole(html, report);
+        return html.append("</main></body></html>").toString();
+    }
+
+    private static void appendStepTable(StringBuilder html, List<?> steps) {
+        html.append("<table><thead><tr><th>Step<th>Tool<th>Status<th>Duration<th>Diagnostics<th>Evidence</tr></thead><tbody>");
         for (Object item : steps) {
             var row = (Map<?, ?>) item;
             html.append("<tr><td>").append(escape(row.get("step"))).append("<td><code>").append(escape(row.get("tool")))
@@ -52,14 +118,17 @@ final class HtmlReport {
             if (row.get("evidence") instanceof Map<?, ?> evidence) {
                 String path = (String) evidence.get("path");
                 String basename = path.substring(path.lastIndexOf('/') + 1);
-                if (basename.matches("[0-9a-f-]{36}-[0-9]{1,2}\\.png")) {
+                if (basename.matches("[0-9a-f-]{36}-(?:d(?:[1-9]|1[0-9]|20)-)?(?:[1-9]|[12][0-9]|3[0-2])\\.png")) {
                     html.append("<a href=\"").append(escape(basename)).append("\">Screenshot</a><br>")
                         .append(escape(evidence.get("timestamp")));
                 }
             } else html.append(escape(row.get("screenshotStatus")));
             html.append("</tr>");
         }
-        html.append("</tbody></table></section>");
+        html.append("</tbody></table>");
+    }
+
+    private static void appendConsole(StringBuilder html, Map<String, Object> report) {
         if (report.get("console") instanceof Map<?, ?> console) {
             html.append("<section><h2>Browser console</h2>").append(escape(console.get("status")));
             if (console.get("entries") instanceof List<?> entries) {
@@ -71,7 +140,6 @@ final class HtmlReport {
             }
             html.append("</section>");
         }
-        return html.append("</main></body></html>").toString();
     }
 
     private static String badge(Object value) {

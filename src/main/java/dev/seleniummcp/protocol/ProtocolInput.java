@@ -1,4 +1,4 @@
-package dev.seleniummcp;
+package dev.seleniummcp.protocol;
 
 import java.io.FilterInputStream;
 import java.io.IOException;
@@ -6,12 +6,12 @@ import java.io.InputStream;
 import java.util.concurrent.CountDownLatch;
 
 /** Enforce a byte limit before the SDK's newline-delimited JSON reader allocates a whole string. */
-final class ProtocolInput extends FilterInputStream {
+public final class ProtocolInput extends FilterInputStream {
     private final CountDownLatch disconnected;
     private final int limit;
     private int length;
 
-    ProtocolInput(InputStream input, CountDownLatch disconnected, int limit) {
+    public ProtocolInput(InputStream input, CountDownLatch disconnected, int limit) {
         super(input);
         this.disconnected = disconnected;
         this.limit = limit;

@@ -1,6 +1,8 @@
-package dev.seleniummcp;
+package dev.seleniummcp.tools;
 
 import com.sun.net.httpserver.HttpServer;
+import dev.seleniummcp.browser.BrowserSession;
+import dev.seleniummcp.security.Origins;
 import io.modelcontextprotocol.spec.McpSchema.*;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;

@@ -1,6 +1,10 @@
-package dev.seleniummcp;
+package dev.seleniummcp.engine;
 
 import com.sun.net.httpserver.HttpServer;
+import dev.seleniummcp.browser.BrowserSession;
+import dev.seleniummcp.reporting.ExecutionHistory;
+import dev.seleniummcp.security.Origins;
+import dev.seleniummcp.tools.BrowserTools;
 import io.modelcontextprotocol.spec.McpSchema.*;
 import java.net.InetSocketAddress;
 import java.nio.file.Files;
@@ -88,11 +92,13 @@ class ScenarioTest {
             artifacts = directory;
             http = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
             origin = "http://127.0.0.1:" + http.getAddress().getPort();
-            String page = """
-                    <!doctype html><title>Local tests</title><h1 id="title">Hello team</h1>
-                    <input id="entry"><input id="hidden" hidden><p>%s</p>
-                    <a id="leave" href="%s">Leave</a>
-                    """.formatted(PRIVATE_MARKER, origin.replace("127.0.0.1", "localhost"));
+            String template;
+            try (var resource = ScenarioTest.class.getResourceAsStream("/scenario-fixture.html")) {
+                template = new String(Objects.requireNonNull(resource).readAllBytes(), StandardCharsets.UTF_8);
+            }
+            String page = template
+                    .replace("PRIVATE_MARKER", PRIVATE_MARKER)
+                    .replace("LEAVE_URL", origin.replace("127.0.0.1", "localhost"));
             http.createContext("/", ex -> {
                 try (ex) {
                     byte[] bytes = page.getBytes(StandardCharsets.UTF_8);

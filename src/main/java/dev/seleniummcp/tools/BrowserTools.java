@@ -1,5 +1,12 @@
-package dev.seleniummcp;
+package dev.seleniummcp.tools;
 
+import dev.seleniummcp.browser.BrowserEvidence;
+import dev.seleniummcp.browser.BrowserSession;
+import dev.seleniummcp.engine.DataDrivenEngine;
+import dev.seleniummcp.engine.ScenarioEngine;
+import dev.seleniummcp.reporting.ExecutionHistory;
+import dev.seleniummcp.security.Origins;
+import dev.seleniummcp.support.ToolFailure;
 import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
 import io.modelcontextprotocol.spec.McpSchema.*;
 import java.time.Duration;
@@ -10,7 +17,7 @@ import org.openqa.selenium.support.ui.ExpectedConditions;
 import org.openqa.selenium.support.ui.WebDriverWait;
 import org.slf4j.LoggerFactory;
 
-final class BrowserTools {
+public final class BrowserTools {
     private static final Map<String, Map<String, Object>> FIELDS = Map.ofEntries(
             Map.entry("browser", choices("chrome", "firefox", "edge")),
             Map.entry("headless", Map.of("type", "boolean", "default", true)),
@@ -41,25 +48,27 @@ final class BrowserTools {
     private final BrowserSession sessions;
     private final Origins origins;
     private final ScenarioEngine engine;
+    private final DataDrivenEngine dataDriven;
 
     private final ExecutionHistory history;
 
-    BrowserTools(BrowserSession sessions, Origins origins) {
+    public BrowserTools(BrowserSession sessions, Origins origins) {
         this(sessions, origins, ExecutionHistory.configured());
     }
 
-    BrowserTools(BrowserSession sessions, Origins origins, ExecutionHistory history) {
+    public BrowserTools(BrowserSession sessions, Origins origins, ExecutionHistory history) {
         this.history = history;
         this.sessions = sessions;
         this.origins = origins;
-        this.engine = new ScenarioEngine(sessions, origins, history);
+        this.engine = new ScenarioEngine(sessions, origins, history, BrowserTools::validate);
+        this.dataDriven = new DataDrivenEngine(sessions, origins, history, BrowserTools::validate);
     }
 
     private static Map<String, Object> stringField(int limit) {
         return Map.of("type", "string", "minLength", 1, "maxLength", limit);
     }
 
-    List<SyncToolSpecification> specifications() {
+    public List<SyncToolSpecification> specifications() {
         var advanced = new AdvancedTools(origins);
         var barcode = new BarcodeTools(origins);
         var tools = new ArrayList<>(List.of(
@@ -171,6 +180,23 @@ final class BrowserTools {
         tools.add(tool("get_execution_evidence", "List screenshot metadata for a retained execution.",
                 a -> reporting("Execution evidence.", Map.of("executionId", a.get("executionId"), "evidence",
                         history.get((String) a.get("executionId")).get("evidence"))), "executionId"));
+        var dataDrivenOverrides = Map.<String, Map<String, Object>>of(
+                "scenarioName", DataDrivenEngine.SCENARIO_NAME_SCHEMA,
+                "steps", DataDrivenEngine.STEPS_SCHEMA,
+                "datasets", DataDrivenEngine.DATASETS_SCHEMA,
+                "stopOnFailure", DataDrivenEngine.STOP_ON_FAILURE_SCHEMA,
+                "timeoutSeconds", DataDrivenEngine.TIMEOUT_SCHEMA,
+                "screenshotOnSuccess", DataDrivenEngine.SCREENSHOT_ON_SUCCESS_SCHEMA,
+                "collectConsole", DataDrivenEngine.COLLECT_CONSOLE_SCHEMA);
+        tools.add(toolWithOverrides("execute_data_driven_scenario",
+                "Validate and execute a parameterized scenario across bounded datasets with browser state isolation.",
+                dataDrivenOverrides,
+                a -> dataDriven.execute(a, steps),
+                "scenarioName", "steps", "datasets", "stopOnFailure?", "timeoutSeconds?",
+                "screenshotOnSuccess?", "collectConsole?"));
+        tools.add(tool("get_data_driven_results",
+                "Retrieve aggregate and per-dataset results, evidence, and report references for a data-driven execution.",
+                a -> dataDriven.results((String) a.get("executionId")), "executionId"));
         return List.copyOf(tools);
     }
 
@@ -244,6 +270,7 @@ final class BrowserTools {
             Object value = entry.getValue();
             boolean valid = switch ((String) rule.get("type")) {
                 case "object" -> value instanceof Map<?, ?>;
+                case "array" -> value instanceof List<?>;
                 case "boolean" -> value instanceof Boolean;
                 case "integer" -> (value instanceof Integer || value instanceof Long)
                         && ((Number) value).longValue() >= (int) rule.get("minimum")
@@ -251,7 +278,8 @@ final class BrowserTools {
                 default -> value instanceof String s
                         && s.length() >= (rule.get("minLength") instanceof Integer min ? min : 0)
                         && s.length() <= (rule.get("maxLength") instanceof Integer max ? max : 16)
-                        && (!rule.containsKey("enum") || ((List<?>) rule.get("enum")).contains(s));
+                        && (!rule.containsKey("enum") || ((List<?>) rule.get("enum")).contains(s))
+                        && (!rule.containsKey("pattern") || s.matches((String) rule.get("pattern")));
             };
             if (!valid) throw new ToolFailure("INVALID_INPUT", "Invalid argument: " + entry.getKey());
         }

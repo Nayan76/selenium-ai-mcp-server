@@ -1,5 +1,7 @@
-package dev.seleniummcp;
+package dev.seleniummcp.reporting;
 
+import dev.seleniummcp.browser.BrowserEvidence;
+import dev.seleniummcp.support.ToolFailure;
 import io.modelcontextprotocol.json.McpJsonDefaults;
 import java.nio.file.*;
 import java.time.Instant;
