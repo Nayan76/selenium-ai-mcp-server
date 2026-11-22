@@ -1,0 +1,38 @@
+package dev.seleniummcp;
+
+import io.modelcontextprotocol.json.McpJsonDefaults;
+import io.modelcontextprotocol.server.McpServer;
+import io.modelcontextprotocol.server.transport.StdioServerTransportProvider;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CountDownLatch;
+
+public final class Main {
+    public static void main(String[] args) throws InterruptedException {
+        // The SDK transport logs complete input lines at DEBUG and parse exceptions at ERROR.
+        System.setProperty("org.slf4j.simpleLogger.log.io.modelcontextprotocol", "off");
+        var protocolOutput = System.out;
+        System.setOut(System.err);
+        var disconnected = new CountDownLatch(1);
+        var input = new ProtocolInput(System.in, disconnected, 4 * 1024 * 1024);
+        var transport = new StdioServerTransportProvider(McpJsonDefaults.getMapper(), input, protocolOutput);
+        var origins = new Origins(System.getenv().getOrDefault("SELENIUM_ALLOWED_ORIGINS", ""));
+        var sessions = new BrowserSession();
+        var history = ExecutionHistory.configured();
+        var maintenance = Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().daemon().name("artifact-maintenance").factory());
+        maintenance.scheduleWithFixedDelay(history::maintain, 0, 1, TimeUnit.MINUTES);
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            maintenance.shutdown();
+            sessions.shutdown();
+            if (Boolean.parseBoolean(System.getenv("SELENIUM_CLEANUP_ON_EXIT"))) history.cleanup();
+        }, "browser-cleanup"));
+        var server = McpServer.sync(transport).serverInfo("selenium-mcp", "0.1.0")
+                .tools(new BrowserTools(sessions, origins, history).specifications()).build();
+        try {
+            disconnected.await();
+        } finally {
+            sessions.shutdown();
+            server.closeGracefully();
+        }
+    }
+}

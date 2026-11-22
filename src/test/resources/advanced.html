@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Browser tools fixture</title>
+<label for="query">Search terms</label><input id="query" name="query">
+<input type="password" id="private">
+<input type="checkbox" id="checked" checked><input type="radio" name="choice">
+<button id="hover" onmouseenter="document.querySelector('output').textContent='Hovered'">Hover here</button>
+<button id="disabled" disabled>Unavailable</button><button id="hidden" hidden>Hidden</button>
+<select id="menu" name="menu"><option value="">None</option><option value="a">Apple</option><option value="b">Berry</option></select>
+<output></output>
+<a id="popup" target="_blank" href="/child">Open window</a>
+<a id="blockedPopup" target="_blank" href="DENIED_ORIGIN/child">Other origin</a>
+<iframe id="child" name="childFrame" src="/child"></iframe>
+<iframe id="blocked" src="DENIED_ORIGIN/child"></iframe>
+<div style="height:250vh"></div><button id="bottom">Bottom</button>

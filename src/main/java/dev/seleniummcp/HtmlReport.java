@@ -1,0 +1,82 @@
+package dev.seleniummcp;
+
+import java.util.List;
+import java.util.Map;
+
+final class HtmlReport {
+    private static final String HEAD = """
+            <!doctype html><html lang="en"><head><meta charset="utf-8">
+            <meta name="viewport" content="width=device-width,initial-scale=1">
+            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'">
+            <title>Selenium execution report</title><style>
+            *{box-sizing:border-box}body{margin:0;background:#f5f7fa;color:#192838;font:16px/1.5 system-ui,sans-serif}
+            main{max-width:1100px;margin:auto;padding:3rem 1.5rem}h1{margin:.25rem 0;font-size:2.2rem}
+            header,section{background:white;border:1px solid #d5dee6;border-radius:8px;padding:1.25rem;margin-bottom:1rem}
+            header{border-top:5px solid #305879}h2{font-size:1.2rem;margin:0 0 .75rem}.meta{color:#415569;overflow-wrap:anywhere}
+            .stats{display:flex;gap:1rem;flex-wrap:wrap}.status{display:inline-block;font-weight:700;padding:.15rem .55rem;border-radius:4px}
+            .PASS{background:#d8f2e1;color:#145832}.FAIL{background:#fce2d5;color:#873900}.ERROR{background:#f9dce2;color:#842237}
+            table{width:100%;border-collapse:collapse;text-align:left}th,td{vertical-align:top;padding:.55rem;border-bottom:1px solid #dbe2e8}
+            th{font-size:.85rem;color:#475e71}.table{overflow:auto}code{font-size:.86em}a{color:#154f89}
+            </style></head><body><main>
+            """;
+
+    static String render(Map<String, Object> report) {
+        var html = new StringBuilder(HEAD);
+        var steps = (List<?>) report.get("steps");
+        html.append("<header>Execution report<h1>").append(escape(report.get("id"))).append("</h1>")
+                .append(badge(report.get("status"))).append("<p class=meta>Execution ID <code>")
+                .append(escape(report.get("executionId"))).append("</code><br>Browser ").append(escape(report.get("browser")))
+                .append("<br>Started ").append(escape(report.get("startedAt"))).append("<br>Ended ")
+                .append(escape(report.get("endedAt"))).append("</p></header><section><h2>Summary</h2><div class=stats>");
+        for (String status : List.of("PASS","FAIL","ERROR")) {
+            long count = steps.stream().filter(row -> status.equals(((Map<?, ?>) row).get("status"))).count();
+            html.append("<span>").append(status).append(" <b>").append(count).append("</b></span>");
+        }
+        html.append("<span>Executed ").append(steps.size()).append(" of ").append(escape(report.get("plannedSteps")))
+                .append("</span><span>").append(escape(report.get("durationMs"))).append(" ms</span></div></section>")
+                .append("<section class=table><h2>Steps</h2><table><thead><tr><th>Step<th>Tool<th>Status<th>Duration<th>Diagnostics<th>Evidence</tr></thead><tbody>");
+        for (Object item : steps) {
+            var row = (Map<?, ?>) item;
+            html.append("<tr><td>").append(escape(row.get("step"))).append("<td><code>").append(escape(row.get("tool")))
+                    .append("</code><td>").append(badge(row.get("status"))).append("<td>").append(escape(row.get("durationMs")))
+                    .append(" ms<td>").append(escape(row.get("code"))).append(" ").append(escape(row.get("message")));
+            if (row.containsKey("expected")) html.append("<br>Expected ").append(escape(row.get("expected")))
+                    .append(" · Actual ").append(escape(row.get("actual")));
+            html.append("<td>");
+            if (row.get("evidence") instanceof Map<?, ?> evidence) {
+                String path = (String) evidence.get("path");
+                String basename = path.substring(path.lastIndexOf('/') + 1);
+                if (basename.matches("[0-9a-f-]{36}-[0-9]{1,2}\\.png")) {
+                    html.append("<a href=\"").append(escape(basename)).append("\">Screenshot</a><br>")
+                        .append(escape(evidence.get("timestamp")));
+                }
+            } else html.append(escape(row.get("screenshotStatus")));
+            html.append("</tr>");
+        }
+        html.append("</tbody></table></section>");
+        if (report.get("console") instanceof Map<?, ?> console) {
+            html.append("<section><h2>Browser console</h2>").append(escape(console.get("status")));
+            if (console.get("entries") instanceof List<?> entries) {
+                for (Object entry : entries) {
+                    var log = (Map<?, ?>) entry;
+                    html.append("<div>").append(escape(log.get("timestamp"))).append(" · ")
+                            .append(escape(log.get("level"))).append(" · ").append(escape(log.get("message"))).append("</div>");
+                }
+            }
+            html.append("</section>");
+        }
+        return html.append("</main></body></html>").toString();
+    }
+
+    private static String badge(Object value) {
+        String status = String.valueOf(value);
+        String style = List.of("PASS","FAIL","ERROR").contains(status) ? status : "";
+        return "<span class=\"status " + style + "\">" + escape(status) + "</span>";
+    }
+
+    private static String escape(Object value) {
+        if (value == null) return "";
+        return value.toString().replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+                .replace("\"","&quot;").replace("'","&#39;");
+    }
+}

@@ -1,0 +1,1 @@
+{"mcpServers":{"selenium":{"command":"java","args":["-jar","target/selenium-mcp.jar"],"env":{"SELENIUM_ALLOWED_ORIGINS":"https://example.com"}}}}
