@@ -3,12 +3,6 @@ on:
   push:
   pull_request:
   workflow_dispatch:
-    inputs:
-      additional_browser:
-        description: Additional regression browser
-        type: choice
-        options: [none, firefox, edge]
-        default: none
 
 permissions:
   contents: read
@@ -18,7 +12,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.additional_browser == 'edge' && '[{"browser":"chrome","os":"ubuntu-24.04"},{"browser":"edge","os":"windows-2025"}]' || inputs.additional_browser == 'firefox' && '[{"browser":"chrome","os":"ubuntu-24.04"},{"browser":"firefox","os":"ubuntu-24.04"}]' || '[{"browser":"chrome","os":"ubuntu-24.04"}]') }}
+        include:
+          - browser: chrome
+            os: ubuntu-24.04
+          - browser: firefox
+            os: ubuntu-24.04
+          - browser: edge
+            os: windows-2025
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     defaults:
@@ -40,13 +40,20 @@ jobs:
           $versionOutput = & java -version 2>&1
           $javaExitCode = $LASTEXITCODE
           $version = [string]($versionOutput | Select-Object -First 1)
-          if ($javaExitCode -ne 0 -or $version -notmatch '^openjdk version "21\.0\.13\.1"') {
-            throw "Expected Temurin Java 21.0.13.1. Actual: $version"
+          if ($javaExitCode -ne 0 -or $version -notmatch '^openjdk version "21\.0\.(\d+)(?:\.\d+)*"' -or [int]$Matches[1] -lt 5) {
+            throw "Browser and API tests require patched Java 21 (21.0.5 or later). Actual: $version"
           }
       - name: Verify with headless browser
         run: mvn -B -ntp "-Dbrowser.test=$env:TEST_BROWSER" verify
       - name: Smoke test packaged stdio server
-        run: node scripts/smoke-stdio.mjs
+        run: |
+          $install = Join-Path (Resolve-Path 'target').Path 'Smoke Install'
+          New-Item -ItemType Directory -Path $install -Force | Out-Null
+          $jar = Join-Path $install 'selenium-mcp-0.6.0.jar'
+          Copy-Item target/selenium-mcp-0.6.0.jar $jar
+          node scripts/check-doctor.mjs $jar
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/smoke-stdio.mjs $jar --examples
       - name: Inventory dependencies
         if: matrix.browser == 'chrome'
         run: mvn -B -ntp org.apache.maven.plugins:maven-dependency-plugin:3.7.0:tree "-DoutputType=json" "-DoutputFile=target/dependencies.json"
@@ -72,6 +79,6 @@ jobs:
         if: success() && matrix.browser == 'chrome'
         with:
           name: selenium-mcp-java21
-          path: target/selenium-mcp-0.5.0.jar
+          path: target/selenium-mcp-0.6.0.jar
           retention-days: 7
           if-no-files-found: error

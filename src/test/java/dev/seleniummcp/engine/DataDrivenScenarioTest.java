@@ -197,6 +197,7 @@ class DataDrivenScenarioTest {
     @EnabledIfSystemProperty(named = "browser.test", matches = "chrome|firefox|edge")
     class Browser {
         private HttpServer http;
+        private HttpServer otherOrigin;
         private String origin;
         private String disallowedOrigin;
         private String browser;
@@ -208,7 +209,8 @@ class DataDrivenScenarioTest {
             http = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
             int port = http.getAddress().getPort();
             origin = "http://127.0.0.1:" + port;
-            disallowedOrigin = "http://localhost:" + port;
+            otherOrigin = DisallowedOriginFixture.start();
+            disallowedOrigin = "http://127.0.0.1:" + otherOrigin.getAddress().getPort();
 
             String loginTemplate;
             byte[] httpOnlyPage;
@@ -260,6 +262,7 @@ class DataDrivenScenarioTest {
         @AfterAll void stop() {
             sessions.shutdown();
             if (http != null) http.stop(0);
+            if (otherOrigin != null) otherOrigin.stop(0);
         }
 
         private List<Map<String, Object>> loginSteps() {

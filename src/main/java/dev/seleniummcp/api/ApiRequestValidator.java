@@ -53,6 +53,10 @@ final class ApiRequestValidator {
 
     record Request(HttpRequest httpRequest, String origin) {}
 
+    boolean hasValidConfiguration() {
+        return validConfiguration;
+    }
+
     Request validate(Map<String, Object> args) {
         if (!validConfiguration) {
             throw new ToolFailure("API_CONFIGURATION_INVALID", "Check the configured API origin list.");

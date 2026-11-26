@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0
+
+- Added checksum-verified installation instructions, stdio client configurations and loopback workflows for browser, API and saved collections.
+- Added opt-in offline startup diagnostics with `--doctor`, plus packaged integration checks for paths with spaces, diagnostics, and local example workflows.
+- Preserved all 45 MCP tool contracts. The CI browser matrix covers Chrome, Firefox, and Edge.
+
 ## 0.5.0
 
 - Added operator-managed API environments and immutable saved collections with status-only execution, environment-only secret resolution, and a bounded private store.

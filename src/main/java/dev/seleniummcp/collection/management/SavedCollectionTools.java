@@ -2,6 +2,7 @@ package dev.seleniummcp.collection.management;
 
 import dev.seleniummcp.api.ApiTools;
 import dev.seleniummcp.collection.ApiCollectionTools;
+import dev.seleniummcp.security.WindowsMetadata;
 import dev.seleniummcp.support.ToolFailure;
 import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
@@ -50,44 +51,73 @@ public final class SavedCollectionTools {
         this.store = store;
     }
 
+    public enum ConfigurationStatus { UNCONFIGURED, READY, INVALID }
+
+    private record Configuration(EnvironmentRegistry environments, SavedCollectionStore store) {}
+
     public static SavedCollectionTools configured(ApiTools api, ApiCollectionTools collections) {
         var planner = new SavedCollectionPlanner(api, System::getenv);
         try {
-            String configValue = System.getenv("SELENIUM_API_ENVIRONMENTS_FILE");
-            String rootValue = System.getenv("SELENIUM_SAVED_COLLECTION_DIR");
-            if (configValue != null && rootValue != null) {
-                Path config = absolute(configValue), root = absolute(rootValue);
-                Path workspace = Path.of("").toRealPath();
-                Path artifacts = physicalPath(Path.of(System.getenv()
-                        .getOrDefault("SELENIUM_ARTIFACT_DIR", "selenium-artifacts")).toAbsolutePath().normalize());
-                var files = new SecureFiles();
-                EnvironmentRegistry registry;
-                Path checkedRoot;
-                try (var directory = files.guard(root, true)) {
-                    checkedRoot = root.toRealPath();
-                    if (overlap(checkedRoot, workspace) || overlap(checkedRoot, artifacts)) {
-                        throw SavedCollectionStore.unavailable();
-                    }
-                }
-                try (var parent = files.guard(config.getParent(), false)) {
-                    files.checkFile(config);
-                    Path checkedConfig = config.toRealPath();
-                    if (checkedConfig.startsWith(workspace) || checkedConfig.startsWith(artifacts)
-                            || checkedConfig.startsWith(checkedRoot)) throw SavedCollectionStore.unavailable();
-                    registry = EnvironmentRegistry.parse(ManagementInput.read(checkedConfig));
-                }
-                var store = new SavedCollectionStore(checkedRoot, files);
-                try { store.recover(); }
+            var configuration = loadConfiguration(System.getenv());
+            if (configuration != null) {
+                try { configuration.store().recover(); }
                 catch (ToolFailure failure) {
                     // A transient lock on startup must not disable the feature for the process lifetime.
                     if (!"STORE_BUSY".equals(failure.code)) throw failure;
                 }
-                return new SavedCollectionTools(collections, planner, registry, store);
+                return new SavedCollectionTools(collections, planner, configuration.environments(), configuration.store());
             }
         } catch (IOException | RuntimeException | LinkageError ignored) {
             // Fail closed without logging operator paths or configuration content.
         }
         return new SavedCollectionTools(collections, planner, null, null);
+    }
+
+    public static ConfigurationStatus checkConfiguration(Map<String, String> env) {
+        if (!env.containsKey("SELENIUM_API_ENVIRONMENTS_FILE") && !env.containsKey("SELENIUM_SAVED_COLLECTION_DIR")) {
+            return ConfigurationStatus.UNCONFIGURED;
+        }
+        try {
+            if (com.sun.jna.Platform.isWindows()
+                    && !WindowsMetadata.isLocal(artifactPath(env), true)) {
+                return ConfigurationStatus.INVALID;
+            }
+            var configuration = loadConfiguration(env);
+            if (configuration != null && configuration.store().hasDirectoryAccess()) return ConfigurationStatus.READY;
+        } catch (IOException | RuntimeException | LinkageError ignored) {
+            // Diagnostics report only the outcome of validation.
+        }
+        return ConfigurationStatus.INVALID;
+    }
+
+    private static Configuration loadConfiguration(Map<String, String> env) throws IOException {
+        String configValue = env.get("SELENIUM_API_ENVIRONMENTS_FILE");
+        String rootValue = env.get("SELENIUM_SAVED_COLLECTION_DIR");
+        if (configValue == null || rootValue == null) return null;
+        Path config = absolute(configValue), root = absolute(rootValue);
+        Path workspace = Path.of("").toRealPath();
+        Path artifacts = physicalPath(artifactPath(env));
+        var files = new SecureFiles();
+        EnvironmentRegistry registry;
+        Path checkedRoot;
+        try (var directory = files.guard(root, true)) {
+            checkedRoot = root.toRealPath();
+            if (overlap(checkedRoot, workspace) || overlap(checkedRoot, artifacts)) {
+                throw SavedCollectionStore.unavailable();
+            }
+        }
+        try (var parent = files.guard(config.getParent(), false)) {
+            files.checkFile(config);
+            Path checkedConfig = config.toRealPath();
+            if (checkedConfig.startsWith(workspace) || checkedConfig.startsWith(artifacts)
+                    || checkedConfig.startsWith(checkedRoot)) throw SavedCollectionStore.unavailable();
+            registry = EnvironmentRegistry.parse(ManagementInput.read(checkedConfig));
+        }
+        return new Configuration(registry, new SavedCollectionStore(checkedRoot, files));
+    }
+
+    private static Path artifactPath(Map<String, String> env) {
+        return Path.of(env.getOrDefault("SELENIUM_ARTIFACT_DIR", "selenium-artifacts")).toAbsolutePath().normalize();
     }
 
     public List<SyncToolSpecification> specifications() {

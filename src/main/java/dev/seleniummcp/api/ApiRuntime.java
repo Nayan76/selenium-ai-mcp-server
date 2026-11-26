@@ -10,6 +10,14 @@ public final class ApiRuntime {
 
     private ApiRuntime() {}
 
+    public static boolean supportsApi() {
+        return supportsHeaderLimit(Runtime.version());
+    }
+
+    public static boolean validOrigins(String origins, boolean allowLoopback) {
+        return new ApiRequestValidator(origins, allowLoopback).hasValidConfiguration();
+    }
+
     public static void configureHeaderParser() {
         if (supportsHeaderLimit(Runtime.version()) && !hasSafeLimit()) {
             System.setProperty(HEADER_PROPERTY, Integer.toString(MAX_HEADER_BYTES));

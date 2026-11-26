@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { closeSync, fstatSync, openSync, writeFileSync } from 'node:fs';
+import { closeSync, fstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { resolve } from 'node:path';
 import { createInterface } from 'node:readline';
+import { respond as exampleFixture } from '../examples/fixture.mjs';
+import * as examples from '../examples/workflows.mjs';
 
 const tools = [
   'launch_browser', 'navigate', 'click_element', 'type_text', 'get_page_text', 'find_elements',
@@ -19,13 +22,21 @@ const tools = [
   'list_api_environments', 'save_api_collection', 'list_saved_api_collections', 'get_saved_api_collection',
   'execute_saved_api_collection'
 ];
-const jar = process.argv[2] ?? 'target/selenium-mcp-0.5.0.jar';
+const jar = process.argv[2] ?? 'target/selenium-mcp-0.6.0.jar';
 const flags = process.argv.slice(3);
 const unsupportedRuntime = flags.includes('--unsupported-runtime');
 const savedFixture = flags.includes('--saved-fixture');
+const checkExamples = flags.includes('--examples');
+const browserExample = flags.includes('--browser-example');
+const catalogOnly = flags.includes('--catalog');
+const version = catalogOnly && flags.includes('--baseline-v050') ? '0.5.0' : '0.6.0';
 let fixtureRequests = 0;
 const fixture = createServer((request, response) => {
   fixtureRequests++;
+  if (request.url === '/' || request.url.startsWith('/api/')) {
+    exampleFixture(request, response);
+    return;
+  }
   if (request.url === '/check' && request.headers.authorization !== 'Bearer fixture-secret') {
     response.writeHead(401);
     response.end();
@@ -42,13 +53,14 @@ const fixture = createServer((request, response) => {
 fixture.listen(0, '127.0.0.1');
 await once(fixture, 'listening');
 const origin = `http://127.0.0.1:${fixture.address().port}`;
-const env = {...process.env, SELENIUM_API_ALLOWED_ORIGINS: origin, SELENIUM_API_ALLOW_LOOPBACK: 'true'};
+const env = {...process.env, SELENIUM_ALLOWED_ORIGINS: origin,
+  SELENIUM_API_ALLOWED_ORIGINS: origin, SELENIUM_API_ALLOW_LOOPBACK: 'true'};
 if (savedFixture) {
   assert.ok(env.SELENIUM_API_ENVIRONMENTS_FILE && env.SELENIUM_SAVED_COLLECTION_DIR);
   env.PHASE15_SMOKE_AUTH = 'Bearer fixture-secret';
   const config = JSON.stringify({
     schemaVersion: 1,
-    profiles: {dev: {enabled: true, origin, routes: {
+    profiles: {dev: {enabled: true, origin, routes: {...examples.profiles(origin).profiles.dev.routes,
       check: {method: 'GET', path: '/check', secretHeaders: {Authorization: 'PHASE15_SMOKE_AUTH'}},
       blocked: {method: 'POST', path: '/check'},
     }}, staging: {origin, routes: {check: {method: 'GET', path: '/check'}}}},
@@ -90,14 +102,39 @@ async function request(id, method, params = {}) {
     return response.result;
   }
 }
+function canonical(_key, value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return value;
+  return Object.fromEntries(Object.keys(value).sort().map(name => [name, value[name]]));
+}
 try {
   const init = await request(1, 'initialize', {protocolVersion:'2025-06-18', capabilities:{},
     clientInfo:{name:'release-smoke',version:'1'}});
   assert.equal(init.serverInfo.name, 'selenium-mcp');
-  assert.equal(init.serverInfo.version, '0.5.0');
+  assert.equal(init.serverInfo.version, version);
   send({method:'notifications/initialized'});
   const listed = await request(2, 'tools/list');
   assert.deepEqual(listed.tools.map(t => t.name).sort(), tools.sort());
+  if (catalogOnly) {
+    console.log(JSON.stringify(listed.tools.sort((a, b) => a.name.localeCompare(b.name)), canonical));
+  } else {
+    await exercise();
+  }
+  child.stdin.end();
+  const [code] = await closed;
+  assert.equal(code, 0);
+  if (!catalogOnly) {
+    console.log(unsupportedRuntime
+      ? 'Verified initialize, 45 named tools, browser dispatch, API runtime guards, and clean EOF.'
+      : 'Verified initialize, 45 named tools, API and collection round trips, JDK header rejection and clean EOF.');
+  }
+} finally {
+  clearTimeout(stop);
+  if (child.exitCode === null && child.signalCode === null) child.kill();
+  fixture.closeAllConnections();
+  fixture.close();
+}
+
+async function exercise() {
   const result = await request(3, 'tools/call', {name:'get_page_text',arguments:{}});
   assert.equal(result.isError, true);
   assert.equal(result.structuredContent.code, 'NO_SESSION');
@@ -199,15 +236,45 @@ try {
     assert.equal(environments.isError, true);
     assert.equal(environments.structuredContent.code, 'STORE_UNAVAILABLE');
   }
-  child.stdin.end();
-  const [code] = await closed;
-  assert.equal(code, 0);
-  console.log(unsupportedRuntime
-    ? 'Verified initialize, 45 named tools, browser dispatch, API runtime guards, and clean EOF.'
-    : 'Verified initialize, 45 named tools, API and collection round trips, JDK header rejection and clean EOF.');
-} finally {
-  clearTimeout(stop);
-  if (child.exitCode === null && child.signalCode === null) child.kill();
-  fixture.closeAllConnections();
-  fixture.close();
+  let nextId = 100;
+  async function exampleCall(name, args) {
+    const result = await request(nextId++, 'tools/call', {name, arguments: args});
+    assert.ok(!result.isError, name + ' failed: ' + result.structuredContent?.code);
+    return result;
+  }
+  if (checkExamples) {
+    const sent = (await exampleCall('send_api_request', examples.send(origin))).structuredContent;
+    for (const [name, args] of examples.assertions(sent.requestId)) {
+      assert.equal((await exampleCall(name, args)).structuredContent.status, 'PASS');
+    }
+    const history = await exampleCall('get_api_execution_results', {requestId: sent.requestId});
+    assert.equal(history.structuredContent.assertions.length, 2);
+    const chain = (await exampleCall('execute_api_collection', examples.collection(origin))).structuredContent;
+    assert.equal(chain.passed, 2);
+    const details = await exampleCall('get_api_collection_results', {executionId: chain.executionId});
+    assert.equal(details.structuredContent.passed, 2);
+    const report = await exampleCall('export_api_collection_report', {executionId: chain.executionId, format: 'json'});
+    assert.match(report.structuredContent.path, /\.json$/);
+    const exported = readFileSync(resolve(env.SELENIUM_ARTIFACT_DIR ?? 'selenium-artifacts',
+      report.structuredContent.path), 'utf8');
+    assert.equal(JSON.parse(exported).executionId, chain.executionId);
+    assert.doesNotMatch(exported, /fixture-1|Fixture item/);
+    if (savedFixture) {
+      const definition = (await exampleCall('save_api_collection', examples.saved)).structuredContent.collection;
+      const run = (await exampleCall('execute_saved_api_collection',
+        {collectionId: definition.collectionId, environmentId: 'dev'})).structuredContent;
+      assert.equal(run.passed, 1);
+      await exampleCall('get_api_collection_results', {executionId: run.executionId});
+    }
+    console.log(savedFixture ? 'Verified API, collection export and saved examples.' : 'Verified API and collection export examples.');
+  }
+  if (browserExample) {
+    for (const [name, args] of examples.browser(origin)) {
+      const result = await exampleCall(name, args);
+      if (name === 'find_elements') assert.equal(result.structuredContent.total, 1);
+      if (name === 'assert_element_text') assert.equal(result.structuredContent.status, 'PASS');
+      if (name === 'take_screenshot') assert.ok(result.content.some(item => item.mimeType === 'image/png'));
+    }
+    console.log('Verified Chrome fixture and PNG evidence.');
+  }
 }

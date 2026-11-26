@@ -1,10 +1,14 @@
 # Selenium MCP Server
 
-Control one Chrome, Firefox, or Edge session from an MCP client over stdio. Version 0.5.0 exposes 45 tools, including saved API collections and operator-managed environments. The browser tools share a fresh profile and run headlessly by default.
+Control one Chrome, Firefox, or Edge session from an MCP client over stdio. Version 0.6.0 exposes 45 tools, including saved API collections and operator-managed environments. The browser tools share a fresh profile and run headlessly by default.
+
+## Get started
+
+[Install the official release JAR and verify SHA-256](docs/installation.md), [connect an MCP client](docs/mcp-clients.md), and run the [local examples](examples/README.md). See [troubleshooting](docs/troubleshooting.md) for startup diagnostics.
 
 ## Build and run
 
-Install JDK 21, Maven 3.9+, and the browser you intend to use. Selenium Manager resolves compatible drivers on first launch, which may require internet access and a writable cache. In offline environments, provision a compatible driver on PATH. Inspector 2.16.0 declares Node.js ^22.23.4, ^24.22.1 or >=26.12.1.
+Install a patched JDK 21 (21.0.5 or later in the Java 21 line), Maven 3.9+, and the browser you intend to use. Selenium Manager resolves compatible drivers on first launch, which may require internet access and a writable cache. In offline environments, provision a compatible driver on PATH. Inspector 2.16.0 declares Node.js ^22.23.4, ^24.22.1 or >=26.12.1.
 
 From the project directory, run:
 
@@ -25,7 +29,7 @@ npx --yes @modelcontextprotocol/inspector@2.16.0 --cli --config inspector.json -
 npx --yes @modelcontextprotocol/inspector@2.16.0 --cli --config inspector.json --server selenium --method tools/call --tool-name get_page_text
 ```
 
-Expect 45 tools from v0.5.0. The second command returns a structured `NO_SESSION` error. Each CLI invocation launches a new process. For a sequence of browser or API operations, start the interactive Inspector and keep the connection open:
+Expect 45 tools from v0.6.0. The second command returns a structured `NO_SESSION` error. Each CLI invocation launches a new process. For a sequence of browser or API operations, start the interactive Inspector and keep the connection open:
 
 ```powershell
 npx --yes @modelcontextprotocol/inspector@2.16.0 --web --config inspector.json --server selenium
@@ -418,7 +422,7 @@ Windows validation inspects native handles for reparse points, owner, protected 
 
 The store locks across processes, writes to an exclusive private temporary file, flushes it, and atomically renames it into place. Interrupted runs may leave a temporary file. Recovery removes only validated store-owned temporary entries under the same lock. Invalid committed records return `STORE_CORRUPT` and need offline operator repair. If interruption follows rename, the record may already exist even if the client received no response. List collections to reconcile before retrying. Stop all server instances before deleting or repairing a record. This protects against interrupted processes. Filesystem durability during power loss depends on the operating system and volume.
 
-For packaged integration testing, provide a **disposable, empty, preprovisioned** store and a private fixture configuration file. Run `node scripts/smoke-stdio.mjs target/selenium-mcp-0.5.0.jar --saved-fixture`. The fixture mode replaces that configuration file with a loopback profile and exercises all five saved tools. Use a fresh fixture before repeating with Java 21.0.2 and `--unsupported-runtime`.
+For packaged integration testing, provide a **disposable, empty, preprovisioned** store and a private fixture configuration file. Run `node scripts/smoke-stdio.mjs target/selenium-mcp-0.6.0.jar --saved-fixture`. The fixture mode replaces that configuration file with a loopback profile and exercises all five saved tools. Use a fresh fixture before repeating with Java 21.0.2 and `--unsupported-runtime`.
 
 ## Architecture and operating limits
 
@@ -453,26 +457,26 @@ The fixtures exercise text entry, click effects, discovery, explicit waits, sele
 
 ## Release build and local client
 
-For a release installation, download `selenium-mcp-0.5.0.jar` and `selenium-mcp-0.5.0.jar.sha256` into the same directory. Compare the JAR's SHA-256 hash with the value in the checksum file before launching it with Java 21. [v0.5.0 release](https://github.com/Nayan76/selenium-ai-mcp-server/releases/tag/v0.5.0)
+For a release installation, download `selenium-mcp-0.6.0.jar` and `selenium-mcp-0.6.0.jar.sha256` into the same directory. Compare the JAR's SHA-256 hash with the value in the checksum file before launching it with Java 21. [v0.6.0 release](https://github.com/Nayan76/selenium-ai-mcp-server/releases/tag/v0.6.0)
 
-Use JDK 21 and Maven 3.9.9 for repeatable local builds. From a fresh checkout, run `mvn -B -ntp clean verify -Dbrowser.test=chrome` (quote `"-Dbrowser.test=chrome"` in PowerShell). The build produces `target/selenium-mcp-0.5.0.jar` and the identical compatibility copy `target/selenium-mcp.jar`. Build and test from the same source, dependency versions, JDK and Maven distribution when comparing release checksums. Maven uses a fixed archive timestamp. The shaded JAR includes the service-provider descriptors and third-party license and notice text.
+Use JDK 21 and Maven 3.9.9 for repeatable local builds. From a fresh checkout, run `mvn -B -ntp clean verify -Dbrowser.test=chrome` (quote `"-Dbrowser.test=chrome"` in PowerShell). The build produces `target/selenium-mcp-0.6.0.jar` and the identical compatibility copy `target/selenium-mcp.jar`. Build and test from the same source, dependency versions, JDK and Maven distribution when comparing release checksums. Maven uses a fixed archive timestamp. The shaded JAR includes the service-provider descriptors and third-party license and notice text.
 
 Launch directly on Linux:
 
 ```sh
-SELENIUM_ALLOWED_ORIGINS=https://example.com java -jar target/selenium-mcp-0.5.0.jar
-sha256sum target/selenium-mcp-0.5.0.jar
+SELENIUM_ALLOWED_ORIGINS=https://example.com java -jar target/selenium-mcp-0.6.0.jar
+sha256sum target/selenium-mcp-0.6.0.jar
 ```
 
 Launch directly on Windows:
 
 ```powershell
 $env:SELENIUM_ALLOWED_ORIGINS = 'https://example.com'
-java -jar target/selenium-mcp-0.5.0.jar
-Get-FileHash target/selenium-mcp-0.5.0.jar -Algorithm SHA256
+java -jar target/selenium-mcp-0.6.0.jar
+Get-FileHash target/selenium-mcp-0.6.0.jar -Algorithm SHA256
 ```
 
-For a desktop MCP client, copy the `mcpServers.selenium` entry from `inspector.json`. Set its second `args` item to the absolute installed JAR path (for example `/opt/selenium-mcp/selenium-mcp-0.5.0.jar` or `C:/Tools/selenium-mcp/selenium-mcp-0.5.0.jar`). Set trusted browser and API origins separately in the entry's `env` object. Restart the client and list tools. Version 0.5.0 advertises 45 tools.
+Use the configuration for your specific [MCP client](docs/mcp-clients.md) and give it the absolute path to the verified JAR. Browser and API origins are configured separately. Restart the client and check for 45 tools.
 
 ### Operational boundaries
 

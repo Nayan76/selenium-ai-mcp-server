@@ -81,6 +81,7 @@ class ScenarioTest {
     @EnabledIfSystemProperty(named = "browser.test", matches = "chrome|firefox|edge")
     class Browser {
         private HttpServer http;
+        private HttpServer otherOrigin;
         private String origin;
         private String browser;
         private final Map<String, Object> title = Map.of("expected", "Local tests");
@@ -92,13 +93,14 @@ class ScenarioTest {
             artifacts = directory;
             http = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
             origin = "http://127.0.0.1:" + http.getAddress().getPort();
+            otherOrigin = DisallowedOriginFixture.start();
             String template;
             try (var resource = ScenarioTest.class.getResourceAsStream("/scenario-fixture.html")) {
                 template = new String(Objects.requireNonNull(resource).readAllBytes(), StandardCharsets.UTF_8);
             }
             String page = template
                     .replace("PRIVATE_MARKER", PRIVATE_MARKER)
-                    .replace("LEAVE_URL", origin.replace("127.0.0.1", "localhost"));
+                    .replace("LEAVE_URL", "http://127.0.0.1:" + otherOrigin.getAddress().getPort());
             http.createContext("/", ex -> {
                 try (ex) {
                     byte[] bytes = page.getBytes(StandardCharsets.UTF_8);
@@ -118,6 +120,7 @@ class ScenarioTest {
         @AfterAll void stop() {
             sessions.shutdown();
             if (http != null) http.stop(0);
+            if (otherOrigin != null) otherOrigin.stop(0);
         }
 
         @Test void recordsEvidenceExportsAndLookup() throws Exception {

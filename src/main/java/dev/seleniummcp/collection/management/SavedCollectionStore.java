@@ -34,6 +34,12 @@ final class SavedCollectionStore {
         withLock(() -> { entries(); return null; });
     }
 
+    boolean hasDirectoryAccess() throws IOException {
+        try (var guard = files.guard(root, true)) {
+            return Files.isReadable(root) && Files.isWritable(root);
+        }
+    }
+
     SavedDefinition save(SavedDefinition record) {
         return withLock(() -> {
             if (entries().size() >= LIMIT) throw new ToolFailure("STORE_LIMIT", "Saved collection storage is full.");

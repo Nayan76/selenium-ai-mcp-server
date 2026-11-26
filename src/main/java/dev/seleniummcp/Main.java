@@ -18,6 +18,10 @@ import java.util.concurrent.CountDownLatch;
 
 public final class Main {
     public static void main(String[] args) throws InterruptedException {
+        if (args.length > 0 && "--doctor".equals(args[0])) {
+            System.exit(Doctor.run(args, System.err, System.getenv()));
+            return;
+        }
         ApiRuntime.configureHeaderParser();
         // The SDK transport logs complete input lines at DEBUG and parse exceptions at ERROR.
         System.setProperty("org.slf4j.simpleLogger.log.io.modelcontextprotocol", "off");
@@ -45,7 +49,7 @@ public final class Main {
             }
         }, "browser-cleanup"));
         var collectionTools = new ApiCollectionTools(api, collections);
-        var server = McpServer.sync(transport).serverInfo("selenium-mcp", "0.5.0")
+        var server = McpServer.sync(transport).serverInfo("selenium-mcp", "0.6.0")
                 .tools(new BrowserTools(sessions, origins, history).specifications())
                 .tools(api.specifications())
                 .tools(collectionTools.specifications())
