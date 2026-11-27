@@ -35,6 +35,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21.0.13+1.2'
+          cache: maven
       - name: Verify patched Java 21 runtime
         run: |
           $versionOutput = & java -version 2>&1
